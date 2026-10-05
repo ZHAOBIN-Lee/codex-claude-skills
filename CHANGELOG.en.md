@@ -11,5 +11,6 @@
 - Record the maintainer's provenance confirmation and document platform adaptation work.
 - Add Chinese and English README pages, user tutorials, and maintenance documentation.
 - Apply the maintainer-selected MIT License with attribution to ZHAOBIN-Lee, including copies in the installable Skill directories.
+- Rewrite the Chinese and English README, tutorials, and maintenance docs so the front page covers purpose, install, and a first request, with the details moved into the tutorials.
 
 Public repository: ZHAOBIN-Lee/codex-claude-skills. No stable release or version tag has been published. Fresh-machine installation and real cross-platform validation remain pending.

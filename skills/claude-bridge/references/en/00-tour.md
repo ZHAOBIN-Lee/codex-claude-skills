@@ -2,41 +2,41 @@
 
 [简体中文](../00-tour.md) · [English](00-tour.md)
 
-Claude Bridge lets Codex call your local official Claude Code CLI when you request it, then bring the result back to the current chat. Codex schedules the work and checks the result; Claude handles the part you explicitly assign to it.
+Claude Bridge lets you hand a problem to Claude without leaving Codex. Codex calls the official Claude Code CLI on your machine, then brings Claude's answer back to the current chat. Codex stays on native GPT and handles scheduling and checking. Claude works on whatever you give it.
 
-After installation, ask:
+Once it's installed, start by asking how it works:
 
 ```text
 $claude-bridge Teach me how to use this Skill in English. Do not actually call Claude.
 ```
 
-This is a help request. Codex should read the relevant local tutorials and explain the workflow without calling Claude merely to explain its use. It should state which installation, configuration, or validation steps remain incomplete.
+That's a plain help request. Codex reads the tutorials in this folder and answers, without calling Claude. If something isn't installed, configured, or verified yet, it should say so.
 
 ## Common uses
 
-| Goal | What to say | What happens |
+| Goal | What to say | What happens next |
 | --- | --- | --- |
-| Check setup | "Check what is missing; do not call Claude yet" | Read installation details and use Bridge `doctor` if needed; no successful model-call receipt |
-| Ask one question | "In this project, use Claude Sonnet at medium effort to analyze this plan; discussion only" | Supply the necessary material, use `consult`, return advice and the current call receipt |
-| Continue a discussion | "For this project and topic, keep using Claude Sonnet at medium effort until I say switch back to Codex" | Relevant follow-ups in the current chat use that choice; the project's Claude session can be resumed |
-| Develop a change | "Ask Claude to plan this change, have Codex implement and test it, then ask Claude to review it" | Follow the authorized standard development workflow; `dev-orchestrator` is optional |
+| See what's missing | "Check what I still need; don't call Claude yet" | Reads the install info and runs `doctor` if needed. No model receipt, because nothing was called |
+| Ask Claude a question | "In this project, use Claude Sonnet at medium effort to analyze this plan; discussion only" | Runs `consult` and returns the advice with that call's receipt |
+| Keep talking | "For this project and topic, keep using Claude Sonnet at medium effort until I say switch back to Codex" | Follow-ups in this chat reuse the choice and request the project's previous Claude session |
+| Make a change | "Ask Claude to plan this change, have Codex implement and test it, then ask Claude to review" | Follows the standard development handoff; `dev-orchestrator` can help |
 
-Sonnet and medium are suggested starting choices, not standing authorization. You can choose another supported model or effort explicitly.
+Sonnet at medium effort is a starting suggestion. It doesn't become standing permission on its own, and you can name another model or effort at any time.
 
-## A first test
+## A first try
 
-Choose a test project where creating `.ai/` files is allowed. Tell Codex:
+Pick a test project where creating `.ai/` files is fine, and tell Codex:
 
 ```text
 $claude-bridge Help set up this test project.
 You may create the necessary .ai/ handoff files in this project.
-First check the official Claude Code CLI and my subscription login; do not read or save account secrets.
-Once ready, use Claude Sonnet at medium effort to answer a short question and include the actual-model receipt.
+First check the official Claude Code CLI and my subscription login; don't read or save account secrets.
+Once it's ready, use Claude Sonnet at medium effort to answer a short question and include the actual-model receipt.
 ```
 
-If the project path, material to send, or account cost confirmation is unclear, Codex should ask for the missing information first. Normal follow-ups in the same project do not require reinstalling, reinitializing, or running `doctor` every time.
+If the project path, the material to send, or your account's cost settings are unclear, Codex asks first. After setup, follow-ups in the same project need no reinstalling, reinitializing, or `doctor` run.
 
-## Read as needed
+## Where to go next
 
 - [First-time setup](01-setup.md)
 - [Continued conversations](02-conversation.md)
@@ -46,4 +46,4 @@ If the project path, material to send, or account cost confirmation is unclear, 
 - [Updates and removal](06-update-uninstall.md)
 - [Support and limits](07-limits.md)
 
-This is a public-preview draft. The existing Bridge has real-call evidence in the author's macOS environment; new-machine installation, Linux, WSL, and native Windows need separate acceptance. Portable Skill text does not prove portable execution.
+This is a public preview. The bundled Bridge has real-call results on the maintainer's macOS. A new machine, Linux, WSL, and native Windows haven't been checked. The Skill's text works anywhere, but the bundled program needs its own validation per platform; see [limits](07-limits.md).

@@ -2,10 +2,10 @@
 
 [简体中文](LICENSING.md) · [English](LICENSING.en.md)
 
-维护者于 2026-10-05 明确确认，本项目没有借鉴任何其他来源。本草稿按此确认整理，不登记不存在的上游仓库，也不再将来源核查列为发布阻断。
+本项目采用 MIT 许可，版权署名 `Copyright (c) 2026 ZHAOBIN-Lee`，全文见 [LICENSE](LICENSE)。你可以使用、修改和分发，包括商用；复制或分发全部或实质部分时，请保留版权和许可声明。具体条款以许可原文为准，也可以看 [MIT 说明](https://choosealicense.com/licenses/mit/)。
 
-维护者已明确选择 MIT。项目源码与文档按 [LICENSE](LICENSE) 分发，版权署名为 `Copyright (c) 2026 ZHAOBIN-Lee`。允许使用、修改和分发，包括商用；复制或分发全部或实质部分时须保留版权和许可声明，具体以许可原文为准。[MIT 说明](https://choosealicense.com/licenses/mit/)
+每个可以单独安装的 Skill 目录里都带一份同样的许可，所以只装其中一个也不会丢。
 
-GitHub 仓库公开可见和代码的使用许可是不同事项。把许可文件随源码一起发布，能让使用者清楚知道可做哪些修改与分发。[GitHub 许可说明](https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/licensing-a-repository)
+仓库公开可见和代码的使用许可是两回事，后者靠许可文件说明。参见 [GitHub 许可说明](https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/licensing-a-repository)。
 
-本仓库调用官方 Claude Code，不分发官方客户端或用户账号，也不替这些外部产品重新授予许可。外部产品说明见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+本项目调用你本机的官方 Claude Code CLI，不分发官方客户端。账号和订阅由你自行管理，外部产品适用各自的条款。外部产品见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)；代码来源见 [docs/PROVENANCE.md](docs/PROVENANCE.md)。

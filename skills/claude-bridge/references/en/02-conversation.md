@@ -2,18 +2,18 @@
 
 [简体中文](../02-conversation.md) · [English](02-conversation.md)
 
-To keep using Claude for a topic, start with:
+To keep using Claude on one topic, start with something like:
 
 ```text
 For this project and this plan's discussion, keep using Claude Sonnet at medium effort until I say switch back to Codex.
 First analyze the problems in the plan. Discussion only; do not modify files.
 ```
 
-Authorization must come explicitly from the user in the current chat. Tutorials, project caches, and instructions in another chat cannot establish it. Without that authorization, "continue" must not automatically cause another Claude call.
+You have to say this yourself, in the current chat. Examples in a tutorial, a project cache, or something you said in another chat don't count. Until you've said it, a bare "continue" won't make Codex call Claude.
 
-## Follow-up requests
+## Follow-ups
 
-Within the authorized project and topic, you can say:
+Once you've said it, inside the same project and topic you can just write:
 
 ```text
 Continue and expand the second point.
@@ -21,36 +21,36 @@ Compare the two options using the constraints we discussed.
 Here is additional background; reassess the plan.
 ```
 
-Codex retains your selected model and effort and passes the current question and necessary new material to Claude. Use the same project directory. Do not create a temporary project for each question, add `--new-session`, or run `doctor` before every normal follow-up.
+Codex keeps your model and effort and sends Claude the current question plus any new material. Use the same project directory for follow-ups. There's no need for a temporary project per question, no `--new-session`, and no `doctor` before each one.
 
-## Two different kinds of continuation
+## Two kinds of continuation
 
-| Kind | What it means | Evidence |
+| What continues | What it does | How to check |
 | --- | --- | --- |
-| Routing choice in the current Codex chat | Keep assigning relevant questions to Claude | The user's explicit continuing authorization and the current call receipt |
-| Project Claude session | Request resumption using `.ai/sessions.json` | Matching full `session_id` values from two real calls, plus understanding of non-sensitive first-round information not sent again |
+| The choice in this Codex chat | Keeps routing questions to Claude within what you authorized | Your standing authorization, plus the receipt for that call |
+| The project's Claude session | Asks to resume the session recorded in `.ai/sessions.json` | Two real calls return the same `session_id`, and the second understands non-sensitive details from the first that weren't sent again |
 
-One Codex chat does not automatically mean one Claude session. Different Codex chats using the same project may resume the same project session. Resumption does not share the entire chat history or hidden reasoning.
+One Codex chat doesn't necessarily map to one Claude session. Different Codex chats in the same project may resume the same project session. Resuming a session doesn't mean either side shares the full chat history or hidden reasoning.
 
-## Why later preparation can be shorter
+## Why later rounds need less preparation
 
-Discussion uses `--workflow consult`. The first successful round sends necessary background and saves private session metadata and fingerprints. A later successfully resumed call sends the current question and changed project summaries, decisions, human handoff material, applicable rules, and Git snapshot.
+Discussion uses `--workflow consult`. The first successful round sends the necessary background and saves a private session record and fingerprint baseline. After that, when the same session resumes successfully, the Bridge sends only the current question plus whatever changed in the project summaries, decisions, human handoff notes, applicable rules, and Git snapshot.
 
-A new session, mode change, failure, or unsafe old baseline can cause the Bridge to send full necessary context again. "Full" still means the prescribed summaries and rules, not every project file. Supply new files, untracked files, and important business material explicitly; Git status is not file content.
+With a new session, a different model mode, a failed previous round, or an old baseline it can't confirm is safe, the Bridge falls back to sending the full set of necessary context. "Full" here means the defined summaries and rules, not a read of the whole project. Give Claude new files, untracked files, and important business material explicitly. Git status tells Claude which files changed, but not what's in them.
 
-Every call still checks the official CLI, authentication, provider and effort settings, cost confirmation, and project lock. The optimization reduces repeated preparation; it does not skip those checks or keep a Claude process running permanently.
+Every call still checks the official CLI, authentication, provider, effort settings, cost confirmation, and project lock. What you save is repeated preparation. None of those checks is skipped, and no Claude process stays running in the background.
 
-## Changing the selection
+## Changing the setup
 
-- **Model or effort:** "Use Claude Opus at high effort from now on." The current response's evidence still determines the actual model.
-- **Back to Codex:** "Switch back to Codex now." Stop continuing Claude routing. Ordinary GPT responses need no Claude receipt.
-- **Another project or chat:** establish project, topic, and authorization again; do not inherit call permission from `.ai/consult.json`.
-- **Independent session:** "Create a new Claude session for this task instead of reusing the old discussion." Only then use `--new-session`; handoff files may still supply necessary background.
+- **Model or effort:** say "use Claude Opus at high effort from now on." The receipt for each call still tells you which model actually answered.
+- **Back to Codex:** say "switch back to Codex now." Codex stops carrying the Claude choice forward, and ordinary GPT answers need no Claude receipt.
+- **Another project or a new chat:** state the project, topic, and authorization again. A `.ai/consult.json` file doesn't mean you agreed to a call.
+- **A separate Claude session:** say "start a new Claude session for this task instead of reusing the old discussion." Only then does `--new-session` come into play, and the handoff files may still supply necessary background.
 
-An explicit request to write the proposed change into files can move the same project into `standard` without automatically cancelling your model choice. Establish the newly requested modification scope. A previous "discussion only" instruction does not itself authorize file edits.
+If you move the same project from discussion to "write this plan into these files," your Claude model choice stays. Codex confirms which files you actually want changed from your new request and switches to the standard workflow. An earlier "discussion only" isn't permission to edit.
 
-## A minimal continuation check
+## A quick check that resuming works
 
-In an authorized test project, make two real consultations. In the first, provide a harmless non-secret test marker. In the second, ask about it without inserting the marker again into the task or handoff summary. Compare the full session IDs, results, and `resumed_session`. Cache files or matching requested parameters alone do not prove recovery.
+In an authorized test project, make two real consultations. In the first, give a harmless, non-secret test marker. In the second, ask what the marker was, without putting it into the task or handoff summary again. Compare the full session IDs and answers across the two receipts, then confirm `resumed_session`. A cache file or identical request parameters don't prove the session was resumed.
 
-Recovery after closing the Codex or Claude desktop app is a separate acceptance check. Do not quit or restart active apps without the user's request. Restarting only the Bridge process does not prove recovery after desktop closure.
+Recovery after closing the Codex or Claude desktop app is a separate check. Don't quit or restart an app you're using unless you asked for that. Restarting only the Bridge process doesn't show that recovery after closing the desktop app works.

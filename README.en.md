@@ -2,78 +2,93 @@
 
 [简体中文](README.md) · [English](README.en.md)
 
-Call the official Claude Code CLI from Codex in the same project, with continued conversations, development handoffs, and verifiable model receipts.
+You're working in Codex and want Claude's opinion on a design, a diff, or a bug that won't die. The usual routine is to copy the material into Claude's app, wait, and paste the answer back. After a few rounds the context is scattered across two windows.
 
-Community project, not an official Anthropic or OpenAI integration.
+The `claude-bridge` Skill skips the copying. Ask in Codex, and Codex hands the question to Claude through the official Claude Code CLI already signed in on your machine, then brings the answer back to the same chat. Follow-ups work the same way. Every call comes with a short receipt: which model actually answered, the session ID, and whether the call succeeded. You don't have to take "I'm Sonnet" from the model's own mouth; you can check.
 
-**Status: 0.1.0-draft public preview under the [MIT License](LICENSE). No stable release is available. The maintainer has confirmed that this project was not derived from other repositories.**
+Codex itself stays on native GPT. Claude is only called when you ask for it.
 
-Repository: [ZHAOBIN-Lee/codex-claude-skills](https://github.com/ZHAOBIN-Lee/codex-claude-skills). Local macOS offline checks have passed. Fresh-machine setup and real cross-platform calls still require validation.
+This is a community project, not affiliated with Anthropic or OpenAI, under the [MIT License](LICENSE).
 
-## Ask the installed Skill how to use it
+> **0.1.0-draft public preview; no stable release yet.** Tested on the maintainer's Mac. See [Platforms and validation](#platforms-and-validation) for other environments.
 
-The core installation unit is `skills/claude-bridge/`. It includes the instructions, Python implementation, templates, license, and Chinese and English tutorials. It does not require the repository-root documentation or the author's local directories.
+## Quick start
 
-After installation, ask Codex:
+You need:
 
-```text
-$claude-bridge How do I use this Skill? Give me the beginner's guide in English.
-$claude-bridge Check what I need for first-time setup. Do not call Claude yet.
-$claude-bridge Explain how to keep discussing a project with Claude and switch back to Codex.
-```
+- Codex with Skill support.
+- The official Claude Code CLI on your machine, signed in with your own claude.ai Pro or Max subscription. See the [official setup guide](https://code.claude.com/docs/en/setup).
+- Python 3.9 or newer.
 
-Help reads the local tutorials without calling Claude. Codex itself still uses its normal allowance; this does not make all model usage free.
-
-## What it supports
-
-| Goal | Example request | Behavior |
-| --- | --- | --- |
-| One consultation | "Ask Claude Sonnet to analyze this problem" | Uses `consult` for analysis; establish the project and material scope |
-| Continued discussion | "For this project and topic, use Claude Sonnet at medium effort until I say switch back to Codex" | Explicit authorization in the current chat; later calls can resume the project's Claude session |
-| Verify the actual model | "Include the actual model and call evidence" | Every actual call includes the model, full session ID, status, and matching evidence |
-| File work or review | "Have Claude review this project's diff" | Uses `standard` with normal permissions; Codex verifies the result independently |
-| Development workflow | Install the optional `dev-orchestrator` | Experimental: Claude plans and reviews, native GPT executes, tools validate |
-
-The Codex chat keeps its native model. This does not add Claude to Codex's native model menu or share either model's hidden reasoning. Expressions such as `@claude` are semantic conventions understood by the Skill.
-
-## Install the preview
-
-**Read the platform and validation table before installing. This is a preview, not a stable release.**
-
-Send this to Codex:
+Send this to Codex to install the whole `skills/claude-bridge/` directory:
 
 ```text
 $skill-installer Install skills/claude-bridge from https://github.com/ZHAOBIN-Lee/codex-claude-skills using the main branch preview. If a Skill with that name is installed, compare and back it up first.
 ```
 
-Install the entire Skill directory, not only `SKILL.md`. If the installer asks you to restart Codex to discover the new Skill, follow its instructions. Then ask for the beginner's guide and setup check before making a real call. There is no stable tag yet; a future stable installation should pin a tag or commit rather than follow a changing `main` branch.
+If the installer says Codex needs a restart to see the new Skill, do that. Then ask how it works before making any real call:
 
-For a local review, open the [Skill instructions](skills/claude-bridge/SKILL.md) and [five-minute tour](skills/claude-bridge/references/en/00-tour.md). Before using it in another environment, complete [first-time setup](skills/claude-bridge/references/en/01-setup.md). Compare and back up an existing installation before replacing it.
+```text
+$claude-bridge How do I use this Skill? Give me the beginner's guide in English.
+$claude-bridge Check what I need for first-time setup. Do not call Claude yet.
+```
 
-Each user installs and signs in to the official Claude Code CLI, establishes their own CLI path, version and integrity evidence, and confirms their account's cost settings. The repository includes no Claude binary, account, credentials, author-specific cost confirmation, or runtime state. See [official Claude Code setup](https://code.claude.com/docs/en/setup).
+Both only read the local tutorials. Neither calls Claude.
 
-## Configuration and project state
+First-time setup means writing a runtime file for your own official CLI (CLI path, version, SHA-256; see [runtime.example.json](skills/claude-bridge/templates/runtime.example.json) for the format). Keep it outside the Skill directory and pass it with `--runtime`. You also check your own account, confirm that extra usage credits are off, and record that. The example file starts as "unconfirmed", and real calls stay blocked until you confirm. Both steps are per user; don't copy the author's. The details are in [first-time setup](skills/claude-bridge/references/en/01-setup.md), and Codex can walk you through it. Default preferences live in [preferences.example.json](skills/claude-bridge/templates/preferences.example.json).
 
-- [Preference example](skills/claude-bridge/templates/preferences.example.json): suggested defaults are Sonnet and medium effort; explicit user choices take priority.
-- [Runtime example](skills/claude-bridge/templates/runtime.example.json): cost settings start unconfirmed and cannot authorize a real call.
-- Store personal configuration outside the Skill directory and pass it explicitly with `--runtime`. Preserve it during upgrades.
-- Project `.ai/` files hold handoffs, sessions, incremental-context fingerprints, and logs. Installing the Skill, setting defaults, or finding a cache does not authorize model calls.
+## One real request
 
-Preferences are interpreted by the Skill; the Bridge does not automatically parse a new preference subsystem. They do not change Codex's native model or effort settings. Ask for Chinese or English help as needed.
+Once setup is done, ask in your project:
+
+```text
+In this project, use Claude Sonnet at medium effort to find holes in docs/plan.md. Discussion only; don't edit files.
+```
+
+Codex states the model and effort first, sends Claude the material it needs, and brings back the advice with a receipt at the end:
+
+```text
+Claude receipt: actual model <this call's actual_models> | session <full session_id> | status <status> | evidence <this call's log link>
+```
+
+The angle brackets are placeholders. Each call fills them from its own result.
+
+To keep the discussion going, say so once:
+
+```text
+From now on, keep using Claude Sonnet at medium effort for this plan until I say switch back to Codex.
+```
+
+After that, "continue and expand the second point" in the same chat is enough. "Switch back to Codex" stops it. A different project or a new chat needs a fresh instruction.
+
+## What it does
+
+| Goal | You can say | What runs |
+| --- | --- | --- |
+| Ask one question | "Ask Claude Sonnet to look at this problem" | `consult`: analyzes only the material you supply, with built-in tools and MCP off for that call |
+| Keep a discussion going | "For this project, use Claude until I say switch back to Codex" | Requests the project's previous session; `consult` sends only changes when resuming succeeds and the baseline remains valid |
+| Check the model | "Include the actual model and call evidence" | Included by default on every call |
+| Edit files or review a diff | "Have Claude review this project's diff" | `standard`: normal permissions, and Codex checks the result independently |
+| Development workflow (optional) | Install `dev-orchestrator` | Experimental: Claude plans and reviews, native GPT executes, scripted checks move the state forward |
+
+The suggested default is Sonnet at medium effort. That's a preference the Skill follows. Name another model or effort and yours wins.
 
 ## Platforms and validation
 
-| Component | macOS | Linux / WSL | Native Windows |
+| | macOS | Linux / WSL | Native Windows |
 | --- | --- | --- | --- |
-| Skill text and tutorials | Shareable | Shareable | Shareable |
-| Current Bridge implementation | Real calls tested in the author's environment | Independent validation needed | POSIX locks and process handling need adaptation |
-| Repackaged preview | Local checks documented below | Not tested | Not tested; no native-runtime support claim |
+| Skill text and tutorials | Shared | Shared | Shared |
+| Bundled Bridge program | Tested in the maintainer's environment | Not validated | Needs adapting (uses POSIX locks and process control) |
 
-The goal is one Skill and tutorial set with platform-specific execution adapters. Claude Code supporting a platform does not prove that this Bridge already works on it. See the [compatibility plan](docs/en/COMPATIBILITY.md).
+The maintainer's Mac runs official CLI 2.1.285. The existing implementation passed 84/84 Bridge tests using a fake CLI and 48/48 dispatcher tests for task lifecycle and deterministic behavior. Neither suite calls a real model. This documentation update did not rerun those tests. There is no stable tag or Release yet.
+
+Still to do: install by an independent friend, Codex install on a fresh machine, real calls on Linux/WSL, native Windows, and GitHub CI. Team, Enterprise, Console API, and third-party providers are not supported.
+
+For the itemized lists, see [local verification](docs/en/LOCAL_VERIFICATION.md) and the [compatibility plan](docs/en/COMPATIBILITY.md).
 
 ## Tutorials
 
-Both languages are included in the installed Skill. English guides:
+The tutorials ship inside the Skill, so Codex can read them on demand. You can also ask it to explain in English or Chinese. The Chinese versions are one directory up in [references/](skills/claude-bridge/references/00-tour.md).
 
 1. [Five-minute tour](skills/claude-bridge/references/en/00-tour.md)
 2. [First-time setup](skills/claude-bridge/references/en/01-setup.md)
@@ -84,17 +99,14 @@ Both languages are included in the installed Skill. English guides:
 7. [Updates and removal](skills/claude-bridge/references/en/06-update-uninstall.md)
 8. [Limits](skills/claude-bridge/references/en/07-limits.md)
 
-The optional workflow also has an [English introduction](skills/dev-orchestrator/references/guide.en.md).
+The optional workflow has its own [English guide](skills/dev-orchestrator/references/guide.en.md). To look around before installing, the [Skill instructions](skills/claude-bridge/SKILL.md) and the tour are enough.
 
-## Maintenance
+## Other docs
 
-- [Project provenance](docs/en/PROVENANCE.md)
-- [Third-party notices](THIRD_PARTY_NOTICES.en.md)
-- [License details](LICENSING.en.md)
-- [Preview and release checklist](docs/en/RELEASE_CHECKLIST.md)
+- [Compatibility plan](docs/en/COMPATIBILITY.md): what each platform still needs
 - [Local verification](docs/en/LOCAL_VERIFICATION.md)
-- [Contributing](CONTRIBUTING.en.md)
-- [Privacy and reporting issues](SECURITY.en.md)
-- [Changelog](CHANGELOG.en.md)
+- [Preview and release checklist](docs/en/RELEASE_CHECKLIST.md)
+- [License](LICENSING.en.md), [provenance](docs/en/PROVENANCE.md), [third-party notices](THIRD_PARTY_NOTICES.en.md)
+- [Contributing](CONTRIBUTING.en.md), [privacy and issue reporting](SECURITY.en.md), [changelog](CHANGELOG.en.md)
 
-The maintainer authorized this public preview. It is not a stable release or proof of independent-user and cross-platform acceptance. Only reviewed source files, offline tests, generic templates, documentation, and licenses are included. Review future files, Git history, and Actions logs before publication. Existing forks and copies are not recalled by making a public repository private. See [GitHub's visibility documentation](https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/managing-repository-settings/setting-repository-visibility).
+The repository contains source, offline tests, generic templates, and tutorials. You provide Claude Code and your own account; personal configuration and runtime state stay on your machine.

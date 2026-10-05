@@ -1,34 +1,37 @@
-# Portable instructions and platform adapters
+# Platform compatibility and adapter plan
 
 [简体中文](../COMPATIBILITY.md) · [English](COMPATIBILITY.md)
 
-The goal is one Skill, preference convention, and tutorial set, with execution adapted by platform. Shared text does not establish runtime compatibility.
+The idea is simple: the Skill instructions, preference conventions, and tutorials are shared across platforms, and only the layer that makes the call is adapted per OS. The text works anywhere. Whether the bundled scripts run on a given system has to be checked separately.
 
-## Current implementation
+## Where things stand
 
-The Bridge uses Python's standard library, `fcntl` locks, POSIX process groups and file permissions, and a macOS managed-settings path. The optional orchestrator uses its own YAML subset without a runtime PyYAML dependency. The declared Python minimum is 3.9; coverage of candidate versions needs the matrix below.
+The Bridge uses Python's standard library, `fcntl` file locks, POSIX process groups and file permissions, and it reads the macOS managed-settings path. The optional orchestrator ships its own small YAML-subset parser, so it needs no PyYAML at runtime. The declared Python minimum is 3.9; whether every version in range works is something the matrix below still has to confirm.
 
-The official CLI tested in the existing environment is 2.1.285. Establish version, architecture, and integrity on each user's machine. Do not copy the author's ARM binary hash or call an arbitrary PATH executable official merely because its hash was calculated.
+The official CLI used in real calls so far is 2.1.285, on the maintainer's macOS machine. Each user binds their own CLI path, version, architecture, and SHA-256 on their own machine:
 
-## Adapter work still required
+- Don't copy the hash from the author's ARM machine.
+- A hash you compute for some executable on your PATH doesn't show it came from Anthropic. Origin needs its own evidence.
 
-| Capability | macOS / Linux approach | Native Windows work | Acceptance |
+## What each platform still needs
+
+| Capability | macOS / Linux | Native Windows | Done when |
 | --- | --- | --- | --- |
-| Locate Python and CLI | Explicit installation paths, no author directories | Local absolute Python and official-CLI paths | Spaces, Unicode, symlinks, origin evidence |
-| Project exclusion | POSIX locks | Windows locking adapter | Concurrent-call rejection and crash release |
-| Timeout and cleanup | POSIX process groups | Windows process-tree handling | No orphan child processes or duplicate unknown-result retries |
-| Private configuration | Unix permissions and no-symlink rules | ACL and reparse-point handling | Preserve existing protection |
-| Managed settings | Applicable paths for each platform | Official Windows paths | Provider, authentication, and effort overrides |
-| Time and paths | Explicit time zones and local path handling | Time-zone data and native paths | Do not assume a friend's location matches the author's |
+| Find Python and the CLI | Call from explicit install paths; no author directories | Absolute paths for local Python and the official CLI | Spaces, Unicode, and symlinks work; origin has evidence |
+| One call per project | POSIX locks | A Windows locking adapter | A second concurrent call is refused; the lock is released after a crash |
+| Timeout and cleanup | POSIX process groups | Windows process-tree handling | No orphaned children; unknown results aren't retried |
+| Private config and permissions | Unix permissions; symlinks not followed | ACL and reparse-point handling | Porting doesn't weaken protection |
+| Managed-settings check | The relevant path on each platform | Official Windows paths | Provider, authentication, and effort overrides are covered |
+| Time and paths | Explicit time zones; platform path handling | Time-zone data and native paths | Don't assume a friend is in the author's time zone |
 
-**This is an implementation plan, not completed cross-platform support.** Do not label the current POSIX script native-Windows compatible. WSL needs its own path, project-scope, and host-call checks and does not establish native-Windows support.
+Read this table as a to-do list, not a list of what already works. The current POSIX scripts shouldn't be called native-Windows compatible. Running under WSL needs its own check of paths, project scope, and how the host calls the Bridge, and a working WSL setup says nothing about native Windows.
 
 ## Validation matrix
 
-1. Test failures, locks, paths, permissions, timeouts, and saving offline on each platform.
-2. Check flags, subscription authentication, actual models, and session recovery for each candidate official-CLI version.
-3. Install only the Skill directory from a fresh checkout and verify program, templates, license, and tutorials.
-4. Record a user-authorized real consultation and follow-up separately on macOS, Linux/WSL, and native Windows.
-5. Check tutorial/help routing in a fresh chat.
+1. On each platform, run offline cases for failures, locks, paths, permissions, timeouts, and state saving.
+2. For each official CLI version you want to support, check flags, subscription authentication, the model actually returned, and session recovery.
+3. Install only the Skill directory from a fresh checkout and confirm the program, templates, license, and tutorials are all there.
+4. On macOS, Linux/WSL, and native Windows, run one user-authorized real consultation plus a follow-up, and record each result separately.
+5. In a fresh chat, check that a help request like "how do I use this?" reaches the tutorials.
 
-Offline CI does not establish real CLI or desktop acceptance. Do not bypass existing checks for an unknown CLI version merely because a user agrees; verify its capabilities first. See [official CLI setup](https://code.claude.com/docs/en/setup).
+Passing offline CI doesn't mean the real official CLI or the desktop app works. For a CLI version nobody has verified, check what it supports first; a user saying "go ahead" doesn't bypass the existing checks. For the systems the official CLI supports, see its [setup guide](https://code.claude.com/docs/en/setup).

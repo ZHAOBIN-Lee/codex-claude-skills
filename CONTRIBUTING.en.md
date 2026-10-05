@@ -2,15 +2,27 @@
 
 [简体中文](CONTRIBUTING.md) · [English](CONTRIBUTING.en.md)
 
-This is a public preview. Describe the goal, trigger, actual behavior, and validation evidence when proposing a change. For newly imported source or documentation, include its author, original repository, version, and applicable license, and retain existing notices.
+This is a public preview, and issues and patches are welcome. When you propose a change, say what you want to fix, how to trigger it, what you actually saw, and how you checked it.
 
-Run the offline tests:
+If a change brings in new external source or documentation, include its author, original repository, version, and license, and keep the existing notices. If you change something users can see, update the Chinese and English docs together.
+
+## Run the tests
+
+From the repository root:
 
 ```text
 python3 -m unittest discover -s skills/claude-bridge/tests -p 'test_*.py'
 python3 -m unittest discover -s skills/dev-orchestrator/tests -p 'test_*.py'
 ```
 
-The tests use a fake CLI and need no real subscription. Real-model tests require the local user's explicit authorization. Do not put personal subscription accounts or credentials in CI.
+The Bridge tests use a fake CLI; the dispatcher tests check task lifecycle and deterministic behavior. Neither suite calls a real model or needs a subscription. Real-model tests are up to the person running them on their own machine; keep personal subscription accounts and login credentials out of CI.
 
-Do not submit personal runtime files, author-specific installation manifests, project `.ai/` state, native sessions, business material, or secrets. Report the actual tested platform and CLI version; mock success is not proof of real compatibility. Keep Chinese and English explanations aligned when changing user-visible behavior.
+## Before you submit
+
+Check that you haven't included:
+
+- a runtime config or the author's installation manifest
+- anything from a project's `.ai/` directory, or native session records
+- business material, keys, or tokens
+
+When you report results, name the platform and CLI version you actually ran on. A passing mock test shows the offline logic works. It doesn't tell you the real CLI or another platform works.

@@ -2,48 +2,48 @@
 
 [简体中文](../05-troubleshooting.md) · [English](05-troubleshooting.md)
 
-Ask:
+When something fails, you can ask:
 
 ```text
 $claude-bridge Explain this failure. Inspect the current status and necessary metadata first. Do not automatically retry or read account secrets.
 ```
 
-Start with the current result and only the fields needed. Do not paste complete authentication configuration, tasks, session text, or environment-variable values into a public issue.
+Start from this call's result and pull out only the fields you need. In a public issue, don't paste complete authentication config, task text, session content, or environment-variable values.
 
 ## Common cases
 
-| Symptom | Check | Response |
+| Symptom | What to check | What to do |
 | --- | --- | --- |
-| Skill not discovered | Directory, complete resources, format, current discovery state | Follow the local host's setup guidance; new-install routing needs a real check |
-| CLI path or hash mismatch | Whether the pinned official file exists or was upgraded | Verify official origin and version, then update your own pin; do not bypass checks |
-| `subscription_usage_credits_status_unconfirmed` | Your confirmation of extra usage credits | Check your account settings and record the actual confirmation; do not inherit the author's |
-| `consult_usage_credits_user_confirmation_required` | Confirmation source and date | Supply your real confirmation; do not fabricate metadata |
-| Authentication or provider blocked | Safe authentication status and returned variable/field names | Resolve official login yourself; do not print values or switch to an API |
-| Effort environment override blocked | Nonempty `CLAUDE_CODE_EFFORT_LEVEL` | Explain the variable-name conflict; the user decides their settings, without automatic deletion or bypass |
-| Model unavailable or allowance exhausted | Current CLI result and account availability | Report the result and return to authorized GPT work; do not buy credits or silently change models |
-| Permission denied | Exact operation and existing authorization | Retry through normal permissions only when the operation is authorized; do not broaden rules |
-| Project busy or locked | Another call or actual process in that project | Wait or inspect it; do not blindly delete a lock or edit concurrently |
-| `state_update_failed` | Inference result, session saving, failed writes | Report inference and saving separately and retain evidence; do not assume incremental continuation is safe |
-| Timeout | Whether completion is known | Mark unknown completion and inspect necessary metadata; do not send a duplicate task automatically |
+| Codex can't find the Skill | That the directory and files are complete, the Skill format validates, and the current discovery state | See the install part of [first-time setup](01-setup.md). A new machine's routing only counts once you've actually tried it |
+| CLI path or hash mismatch | Whether the official file your runtime points to still exists, or was upgraded | Verify the official install and version, then update your own pin. Don't bypass the check |
+| `subscription_usage_credits_status_unconfirmed` | Whether you've confirmed your own account's extra usage credits | Check your cost settings and record what you find. The author's confirmation doesn't carry over |
+| `consult_usage_credits_user_confirmation_required` | Whether the confirmation's source and date are valid | Add your own real confirmation. Don't invent a date or source |
+| Non-subscription or provider route blocked | Authentication status, and the variable or field names returned | Sort out the official login yourself. Don't print values or switch to an API |
+| Effort environment override blocked | Whether `CLAUDE_CODE_EFFORT_LEVEL` is set to something non-empty | Codex names the variable and the conflict; how to change your settings is your call. It won't delete or bypass anything |
+| Model unavailable or allowance used up | This call's CLI result and your account's actual availability | Report it and go back to the GPT work you authorized. Don't buy extra credits or switch models on your own |
+| Permission denied | Whether the exact operation was already authorized | Retry through normal permissions once the operation is authorized. Don't widen wildcard rules |
+| Project busy or locked | Whether another call in that project is still running | Wait, or check the actual process. Don't just delete the lock or edit in parallel |
+| `state_update_failed` | Whether inference finished, whether the session was saved, which local writes failed | Report the result and the saving status separately, and keep the evidence. Don't assume incremental continuation will still work |
+| Timeout | Whether only the wait ended or the work really didn't finish | Mark completion as unknown and look at the necessary metadata first. Don't auto-resend, or the task may run twice |
 
-Bridge `doctor` is useful for initial diagnosis, program changes, or failed checks. Normal consultation `run` already includes preflight, so do not run it before every follow-up. Bridge `doctor` and the official CLI's `claude doctor` are different tools.
+Run the Bridge's `doctor` for a first diagnosis, after the program changes, or when a check fails. In normal continued consultation, `run` already includes the preflight, so you don't need to run it before every question. The Bridge's `doctor` and the official CLI's `claude doctor` are different tools.
 
-## Missing background
+## Claude seems to have lost the background
 
-Inspect the current `session_id`, `resumed_session`, `context_delivery`, changes, and truncation metadata. A new session, mode change, or invalid baseline may cause full delivery. The existence of `.ai/consult.json` alone does not prove resumption.
+Look at this call's `session_id`, `resumed_session`, `context_delivery`, and the change and truncation metadata. A new session, a mode change, or an invalid baseline makes the Bridge send the full context again. The existence of `.ai/consult.json` alone doesn't show the session was resumed.
 
-Consultation includes only prescribed summaries, rules, and Git snapshots. Explicitly supply new documents, untracked-file contents, and relevant omitted material. Report `truncated_context_names` and `unavailable_context_names`. Fingerprints detect changes, not complete reading. Applicable rules exceeding the allowed budget must block rather than be silently truncated.
+A consultation carries only the defined summaries, rules, and Git snapshot. New documents, untracked files, and truncated parts need to be supplied by you. Anything listed in `truncated_context_names` or `unavailable_context_names` should be reported to you as is. Fingerprints detect changes. They don't prove Claude read everything. If the applicable rules exceed the allowed total, the call should be blocked rather than silently truncated.
 
-## Why it may still be slow
+## Why it can still feel slow
 
-Waiting has three parts: Codex preparing the call, Bridge/Claude execution, and Codex processing the result. Bridge preflight and `cli_wall_ms` measure only the script portion, not the entire chat.
+Waiting has three parts: Codex preparing the call, the Bridge and Claude running, and Codex processing the result. The Bridge's preflight time and `cli_wall_ms` cover only the script's part. They can't tell you how long the whole chat took.
 
-Continued consultation reduces repeated preparation through a fixed project session, incremental material, one `run`, and focused verification. Long chats, Codex's native effort, response length, and networking still matter. Claude's effort parameter does not change Codex's effort.
+Continued consultation cuts repeated steps with a fixed project session, incremental material, a single `run`, and checking on demand. Long chats, Codex's own effort setting, response length, and the network still affect the wait. Claude's effort parameter doesn't change Codex's.
 
-Official duration fields may be session-cumulative. Do not subtract `duration_api_ms` from current wall time to infer startup overhead. Use the Bridge's monotonic-clock fields for that CLI execution and chat events for end-to-end waiting. `--progress` reports stage metadata, not streaming first-token timing.
+Durations reported by the official result may be cumulative over the whole session. Don't subtract `duration_api_ms` from this round's wall time to estimate startup overhead. For how long this round's CLI run took, use the Bridge's monotonic-clock fields. For how long you actually waited, use the timestamps of the chat events. `--progress` prints stage metadata only; it isn't a streaming first-token measurement.
 
-Existing real-call evidence includes a long Sonnet planning consultation with about 176.5 seconds of CLI wall time and about 350 milliseconds of script preflight. Those are observations from one call, not a speed guarantee or validation of every new-machine setup.
+The maintainer validated the current receipt rules with real Sonnet calls on macOS. In one long planning consultation, CLI wall time was about 176.5 seconds and the script's preflight about 350 milliseconds. That's one call's observation, not a speed promise, and it says nothing about other machines' install routes.
 
-## Reporting an issue
+## What to include in an issue
 
-Provide OS, Python version, Bridge version or commit, official CLI version, mode, redacted status/reason, necessary timing fields, and reproduction steps. Absolute paths, full session IDs, and project metadata can be private; review before posting. Do not upload runtime or authentication files, keys, tokens, cookies, complete sessions, or business material.
+Please include: the operating system, Python version, Bridge version or commit, official CLI version, mode, redacted status/reason, the necessary timing fields, and steps to reproduce. Absolute paths, full session IDs, and project metadata in logs can be private, so review them before posting. Don't upload the runtime file, authentication files, API keys, tokens, cookies, complete sessions, or business material.

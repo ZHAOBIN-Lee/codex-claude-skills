@@ -2,19 +2,21 @@
 
 [简体中文](../SKILL.md) · [English](guide.en.md)
 
-`dev-orchestrator` is an optional experimental Skill for organizing development stages. Ordinary Claude questions need only `claude-bridge`. Install and configure the Bridge before trying the orchestrator. The current implementation is distributed under the [MIT License](../LICENSE).
+`dev-orchestrator` is an experimental Skill that splits a development task into stages: Claude plans and reviews, native GPT does the editing, and scripts check the result. Ordinary Claude questions only need `claude-bridge`. Set up the Bridge first, then try this. It's under the [MIT License](../LICENSE).
 
-## Workflow
+It's a workflow for you to try on a task you're willing to supervise. It isn't a promise that it handles every kind of development work on its own.
 
-1. **Architect:** Claude plans the authorized change and writes scoped tasks.
-2. **Executor:** the host's native GPT implements one task within its scope.
-3. **Validator:** the orchestrator runs deterministic project checks and verifies the actual diff.
-4. **Reviewer:** Claude reviews without editing business code by default; issues become rework tasks.
-5. **Orchestrator:** records task/state transitions and continues or stops according to the rules.
+## How a task moves
 
-The project `.ai/` directory stores plans, tasks, state, validation, handoffs, and blockers. `PROJECT_CONTEXT.md`, `DECISIONS.md`, `HANDOFF.md`, session metadata, and Bridge logs keep their existing ownership. Do not hand-edit lifecycle state; use `scripts/devflow.py` transitions, which synchronize task status and project state.
+1. **Architect:** Claude plans the change you authorized and writes small, scoped tasks.
+2. **Executor:** the host's native GPT implements one task, inside that task's scope.
+3. **Validator:** the orchestrator runs the project's deterministic checks and verifies the actual diff.
+4. **Reviewer:** Claude reviews and, by default, doesn't edit business code. Problems it finds become rework tasks.
+5. **Orchestrator:** records each task and state change, then continues or stops according to the rules.
 
-## Example requests
+Plans, tasks, state, validation results, handoffs, and blockers live in the project's `.ai/` directory. `PROJECT_CONTEXT.md`, `DECISIONS.md`, `HANDOFF.md`, session metadata, and Bridge logs keep the owners they already have. Don't edit lifecycle state by hand. Use the `scripts/devflow.py` transitions, which keep task status and project state in sync.
+
+## Asking for it
 
 ```text
 $dev-orchestrator Explain this workflow in English. Do not call Claude yet.
@@ -24,20 +26,29 @@ Show the development status without calling a model.
 Continue the next development stage.
 ```
 
-Recognized semantic shortcuts include `/dev new`, `/dev continue` (one next stage), `/dev run` (advance within limits), `/dev status` (read only), `/dev plan`, `/dev review`, and `/dev resolve`. They are conventions, not a separate native command parser.
+The Skill also understands these shortcuts: `/dev new`, `/dev continue` (one next stage), `/dev run` (advance within the limits), `/dev status` (read only), `/dev plan`, `/dev review`, and `/dev resolve`. They're a way of phrasing the request, and no separate command parser sits behind them.
 
-The strong tier uses the existing Bridge and the user's chosen `sonnet`, `opus`, or `default` mode. The efficient tier uses the current native GPT host model. No new model gateway is introduced. Do not silently substitute GPT for a failed strong-model stage or use Bridge `review` when it would change the selected model or authorize fixes beyond a read-only review.
+The strong tier goes through the existing Bridge, in the `sonnet`, `opus`, or `default` mode you choose. The efficient tier uses whatever native GPT model the current chat is on. No new model gateway is added. If a strong-model stage fails, GPT doesn't quietly fill in for it. Bridge `review` mode isn't used for the Reviewer either, because it could change the model you picked or authorize fixes beyond a read-only review.
 
 ## Dispatch and evidence
 
-Establish the absolute project path and authorization, read applicable rules, inspect Git status, and record existing changes without cleaning them. Initialize missing workflow files only if creating those project files is authorized. Use deterministic `next`, `route`, and `transition` operations to advance state.
+Before dispatching anything, the orchestrator pins down the project's absolute path and your authorization, reads the applicable rules, checks Git status, and notes existing changes without cleaning them up. It initializes missing workflow files only if you authorized creating those project files. It advances state with the deterministic `next`, `route`, and `transition` operations.
 
-For Claude stages, embed the relevant role instructions and task schemas in the task text. Project materials are read progressively from authorized project paths; do not ask Claude to read Skill files outside the project. Keep the assembled task within the Bridge limit without truncating role constraints or acceptance criteria. Run writers serially.
+For a Claude stage, the role instructions and task schemas are embedded in the task text, and project material is read step by step from authorized project paths. Claude isn't asked to read Skill files outside the project. The assembled task has to fit within the Bridge's size limit without trimming role constraints or acceptance criteria. Anything that writes runs one at a time.
 
-After a Claude stage, provide the actual model, full current session ID, status, and uniquely matched evidence according to `claude-bridge`. Verify claimed changes and tests independently. Read-only status and help operations do not reuse historical successful receipts.
+After a Claude stage, the answer includes the actual model, the full session ID of that call, the status, and the matching evidence, following `claude-bridge`'s rules. Claimed changes and tests are verified independently. Read-only status and help requests don't reuse an earlier successful receipt.
 
-## When to stop
+## When it stops
 
-Stop for missing business decisions, conflicting scope, unresolved workspace conflicts, unavailable Bridge/login/allowance/cost confirmation, unavailable validation tools, exhausted configured task/rework/retry limits, or the user's stop request. Evaluate high-risk and irreversible operations under the user's actual authorization. Do not bypass permission or integrity checks to continue.
+It stops when:
 
-The normative role, task-schema, state-machine, routing, review, and escalation instructions are bundled locally and currently primarily written in Chinese. Codex should explain them in the user's requested language without changing their constraints. This introduction does not establish cross-platform runtime support or independent-user acceptance.
+- a business decision is missing, or the scope conflicts with the repo;
+- the workspace has conflicts it can't resolve;
+- the Bridge, login, allowance, or cost confirmation isn't available;
+- the validation tools can't run;
+- the configured limits on tasks, rework, or retries are used up;
+- you tell it to stop.
+
+High-risk or irreversible operations are judged against what you actually authorized. It never bypasses a permission or integrity check just to keep going.
+
+The binding role definitions, task schema, state machine, routing, review, and escalation rules ship locally, mostly written in Chinese for now. Codex should explain them in the language you ask for, without changing what they require. This introduction doesn't establish cross-platform support or acceptance by independent users.
