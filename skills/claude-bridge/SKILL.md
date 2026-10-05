@@ -21,7 +21,7 @@ description: "Explain, set up, and troubleshoot Claude calls and continued conve
 
 只加载与当前请求有关的教程。首次入门先用几句话解释能力与边界，给出“看示例／检查设置／实际调用”的下一步话术。询问“怎么用”不能被当成实际调用授权；有关键歧义及时反问。
 
-其他按需参考：`references/03-models-effort-receipt.md`、`references/04-dev-handoff.md`、`references/06-update-uninstall.md`、`references/07-limits.md`。这些教程与代码都在本 Skill 目录内，安装整个目录，不依赖仓库根 README。
+其他按需参考：`references/03-models-effort-receipt.md`、`references/04-dev-handoff.md`、`references/08-permissions-and-failures.md`、`references/06-update-uninstall.md`、`references/07-limits.md`。这些教程与代码都在本 Skill 目录内，安装整个目录，不依赖仓库根 README。
 
 本文件是分发草稿。代码基线仍使用 POSIX；跨平台执行层与独立朋友安装尚需验收。帮助文字可以在不同系统使用，不能因此宣称实际脚本已在各系统通过。
 
@@ -69,6 +69,8 @@ consult 禁用 CLI 工具，仅分析已提供材料；要读新文件，先在�
 
 开发任务继续走 Claude 规划 → GPT 执行 → 确定性测试 → Claude 审查。`dev-orchestrator` 的标准调用不受 consult 优化替代。GPT 与 Claude 串行修改项目；Claude 不自行编辑桥接状态。Bridge 记录后，GPT 独立核对实际文件、diff 和测试证据。请求 review 不授权范围外修复，发布、部署、外发消息、费用和系统操作仍按本轮已有授权判断。
 
+标准流程里实际让 Claude 用工具或写文件的调用，都加 `--stream-events`。要写文件时，宿主逐个声明项目相对路径 `--output PATH`（可重复；不得是 `.ai/` 下的 HANDOFF、STATE、VALIDATION、PROGRESS、sessions.json、logs 等自有文件），并在调用前确认项目本地设置里有对应的精确 `Edit(...)` 规则，缺少时 Bridge 会在推理前阻止。只读代码审查可以没有 `--output`；纯咨询仍走无工具 JSON 路径，不加 `--stream-events`，也不额外跑 doctor。一次只交一个可检查的成果或一小批有界任务，宿主核对实际文件、diff 和必要测试后再推进，不设固定批数；同项目的连续批次不加 `--new-session`。权限规则、字段含义和失败后的处理见 `references/08-permissions-and-failures.md`。
+
 两类流程都在启动前简短说明所选模型及请求强度，每次显式传入 `--effort`、`--effort-source`、`--effort-reason`。仅传必要材料，不包含密码、Token、Cookie、隐藏推理或无关私人数据。
 
 ## 调用回执
@@ -76,7 +78,7 @@ consult 禁用 CLI 工具，仅分析已提供材料；要读新文件，先在�
 每次调用返回后，在给用户的答复中附一条简短回执，包含**实际模型、完整会话 ID、调用状态和可核对的凭证**。此规则适用于 consult、standard 和经 dev-orchestrator 派发的 Claude 阶段；同一轮多次调用时逐次列出，可合并成简短表格，不把 Claude 处理部分与 GPT 执行部分混为一谈。
 
 - 实际模型取本轮返回的 `actual_models`，其来源是官方 Claude CLI 结果的 `modelUsage`。不能用请求的 `--mode`、旧调用记录或模型自我介绍代替；返回多个名称时如实列出，缺失时写“未取到实际模型证据”。
-- 会话 ID 取本轮返回的 `session_id`；未返回时写“未返回”，不能拿请求恢复的旧 ID 冒充本轮回执。结合本轮 `status`、`reason` 和官方结果元数据说明调用情况，`inference: true` 不能单独证明模型已处理请求；失败、权限拒绝不报完成，超时注明完成情况未知。`state_update_failed` 等落盘失败需同时保留 `inference_status` 与 `session_saved`，区分模型推理结果和本地保存结果。
+- 会话 ID 取本轮返回的 `session_id`；未返回时写“未返回”，不能拿请求恢复的旧 ID 或流中途事件里的 ID 冒充本轮回执。官方最终结果带有效 ID 时，失败、权限拒绝、超时也如实报告，但只有 `status` 为 complete 才会保存为续接指针（看 `session_saved`）；运行时权限拒绝早停没有最终结果，就写“未返回”。权限拒绝看 `permission_denials_status`：`listed`、`none_reported`、`unavailable`，`unavailable`（含 null）不等于没有拒绝。`result_complete` 为 false 表示结果字段被截断，长文档应写成文件。结合本轮 `status`、`reason` 和官方结果元数据说明调用情况，`inference: true` 不能单独证明模型已处理请求；失败、权限拒绝不报完成，超时注明完成情况未知。`state_update_failed` 等落盘失败需同时保留 `inference_status` 与 `session_saved`，区分模型推理结果和本地保存结果。
 - 凭证使用与本轮时间、会话及运行元数据唯一匹配的项目 `.ai/logs/*.json`，可比较运行前后新增文件来缩小候选范围，不能只挑最新文件或引用别轮成功记录。匹配有歧义时写“对应日志未唯一定位”。按当前任务的输出目录规则提供可点击日志链接，或保存必要元数据摘录并注明原始日志绝对路径。没有落盘凭证时，可保存本轮返回 JSON 的必要元数据摘录，标明来源为本轮返回及日志情况；信息仍不足则说明凭证未取到。摘录不复制任务正文、模型完整输出或秘密，不改写 Bridge 自有日志和状态。
 - `init`、`doctor`、`--dry-run` 或调用前被阻断时，明确写“未实际调用 Claude”，不生成成功回执。Mock/fake CLI 明确标为离线验证。普通 GPT 答复无需附 Claude 回执。
 
@@ -90,9 +92,11 @@ claude-bridge doctor --project DIR
 claude-bridge run --project DIR --mode default|sonnet|opus|review
                  (--task TEXT | --task-file PROJECT_LOCAL_UTF8_FILE)
                  [--workflow standard|consult]
+                 [--stream-events] [--output PROJECT_RELATIVE_FILE]...   (仅 standard)
                  --effort low|medium|high|xhigh|max
                  --effort-source auto|user --effort-reason REASON
-                 [--new-session] [--max-turns N] [--timeout SEC] [--dry-run] [--progress]
+                 [--new-session] [--max-turns 1..20，默认 3] [--timeout SEC，0<SEC<=3600，默认 120]
+                 [--dry-run] [--progress]
 ```
 
 使用上方绝对入口；将 `DIR`、`TEXT`、`REASON` 当作独立参数安全传入，不拼接未转义 shell 代码。`--dry-run` 不调用模型，不能作为真实模型验收。`--new-session` 主动创建新 Claude 会话，仍读取交接文件；不得把它声称为旧 Session 恢复。
@@ -132,7 +136,7 @@ claude-bridge run --project DIR --mode default|sonnet|opus|review
 ## 边界
 
 - 只使用官方 Claude Code 已登录的 Claude.ai 订阅路径。额度/模型不可用时返回 GPT，不自动开启额外 usage、创建 API Key、开启 Billing 或切换 Token API。
-- 不使用 `--dangerously-skip-permissions`，仅在用户已明确授权的任务范围内，为具体文件操作和固定命令使用项目本地 permissions.allow；不设置宽泛通配规则、不扩大到其他项目或全局。Headless 权限拒绝时报告真实结果，只有既有授权覆盖该精确操作或用户进一步批准后才可重试。
+- 不使用 `--dangerously-skip-permissions`，仅在用户已明确授权的任务范围内，为具体文件操作和固定命令使用项目本地 permissions.allow；不设置宽泛通配规则、不扩大到其他项目或全局。Headless 权限拒绝时报告真实结果。`blocked`、`needs_permission`、`failed`、`timeout`、`state_update_failed` 之后不静默重试：先查实际文件和 diff，再在既有授权仍覆盖时说明范围，另行发起新调用；不原样重放已完成的批次，不覆盖已有草稿。既有授权已覆盖所需的精确设置改动时，宿主可以只合并精确 allow 条目、保留其余设置，不必重复询问；新范围、指令含糊或关键决定先问用户。不自动放宽规则、不绕过权限、不删除 deny 保护、不写全局规则、不改走 API。
 - 默认不自动 commit、push、重启桌面应用、升级软件或修改系统。不得执行丢弃现有工作的 Git 操作。
 - `.ai/sessions.json` 保存会话元数据，`.ai/consult.json` 仅保存连续咨询的会话与指纹基线；Bridge 日志仅记必要运行元数据。不得把完整任务、输出或秘密写入日志或指纹缓存，不手工修改缓存冒充恢复成功。
 - Skill 只能缩短 Codex 开始处理消息之后的步骤，不能截获原生输入、改变 Codex 原生强度或保证启动延迟。长聊天或 xhigh 的额外开销需要原生设置与上下文管理，不能用 Claude 的 effort 参数代替。

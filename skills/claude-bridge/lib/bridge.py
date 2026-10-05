@@ -15,7 +15,9 @@ import json
 import math
 import os
 from pathlib import Path
+import posixpath
 import re
+import selectors
 import signal
 import stat
 import subprocess
@@ -122,6 +124,48 @@ TASK_LIMIT = 32000
 TASK_FILE_LIMIT = 128000
 CONSULT_LOG_FIELDS = ("workflow", "context_delivery", "changed_context_names", "prompt_bytes",
                       "truncated_context_names", "unavailable_context_names", "resumed_session", "timings")
+# Whitelisted, metadata-only run evidence. Result bodies never reach logs.
+RUN_LOG_FIELDS = ("permission_denials_truncated", "returned_session_id_status", "actual_models_status",
+                  "cli_output", "termination", "result_complete", "truncated_result_fields",
+                  "declared_outputs", "output_permission_preflight", "output_observation", "stream_events")
+MAX_TURNS_RANGE = (1, 20)
+TIMEOUT_MAX_SECONDS = 3600
+RESULT_STRING_LIMIT = 8000
+RESULT_LIST_LIMIT = 100
+CLI_STDOUT_LIMIT = 10485760
+# Fixed bounded-I/O limits. JSON mode retains at most CLI_STDOUT_LIMIT bytes of stdout. Stream mode
+# retains one frame at a time (STREAM_FRAME_LIMIT) and stops at STREAM_TOTAL_LIMIT of stdout in total.
+# stderr is only counted, never retained; CLI_STDERR_LIMIT stops a runaway writer.
+STREAM_FRAME_LIMIT = 4 * 1024 * 1024
+STREAM_TOTAL_LIMIT = 64 * 1024 * 1024
+CLI_STDERR_LIMIT = 64 * 1024 * 1024
+IO_CHUNK = 65536
+TERMINATE_GRACE = 2.0   # seconds between SIGTERM and SIGKILL, and for reaping afterwards
+DRAIN_GRACE = 1.0       # seconds to collect bytes already written by a terminated CLI
+EXIT_DRAIN_GRACE = 2.0  # seconds to keep reading after the leader exited (descendant-held pipes)
+STREAM_EVENT_TYPES = ("system", "assistant", "user", "result")
+KNOWN_DENIAL_TOOLS = frozenset({"Bash", "Read", "Write", "Edit", "Glob", "Grep", "WebFetch", "WebSearch", "Agent", "Task"})
+# Stops after which the received bytes are not trusted for any final-result evidence.
+UNTRUSTED_STOPS = frozenset({"oversized", "frame_too_large", "critical_frame", "stderr_flood"})
+OUTPUT_LIMIT = 20
+OUTPUT_PATH_LIMIT = 1024
+OUTPUT_HASH_LIMIT = 16 * 1024 * 1024
+OUTPUT_HASH_BUDGET = 64 * 1024 * 1024
+OUTPUT_FORBIDDEN_CHARS = frozenset("*?[]{}!\\")
+# Host/bridge-owned names directly under .ai; also any *.lock file and state.* file.
+OWNED_AI_NAMES = frozenset({"handoff.md", "state.yaml", "validation.md", "progress.md", "sessions.json",
+                            "consult.json", "bridge.lock", ".gitignore"})
+OWNED_AI_DIRS = frozenset({"logs", "backups", "requests"})
+PERMISSION_EDIT_TOOLS = ("Edit", "Write", "MultiEdit", "NotebookEdit")
+PERMISSION_TOOLS = PERMISSION_EDIT_TOOLS + ("Read",)
+PERMISSION_RULE = re.compile(r"([A-Za-z][A-Za-z0-9_]*)(?:\(([\s\S]*)\))?")
+PERMISSION_TOOL_HINT = re.compile(r"\s*(?:edit|write|multiedit|notebookedit|read)\b", re.IGNORECASE)
+PERMISSION_GLOB_CHARS = frozenset("*?[]{}!\\$`")
+PERMISSION_RULE_LIMIT = 1000
+PERMISSION_LIMITATIONS = (
+    "local_file_scan_only", "remote_managed_session_and_cli_rules_not_scanned",
+    "ancestor_settings_not_counted_as_grants", "user_local_settings_not_assumed",
+    "native_cli_enforces_effective_permission", "static_check_is_not_a_sandbox_or_overwrite_guard")
 
 
 class Blocked(Exception):
@@ -509,6 +553,350 @@ def route_guard(project):
                               "note": "Explicit CLI effort overrides saved defaults. Existing local/organization caps and model support can limit it; effective effort remains unknown."}}
 
 
+def output_owned_reason(parts):
+    folded = [part.casefold() for part in parts]
+    if ".git" in folded or ".claude" in folded:
+        return "output_path_git_or_claude_refused"
+    if folded[0] == ".ai":
+        name = folded[1] if len(folded) > 1 else ""
+        if (not name or name in OWNED_AI_NAMES or name in OWNED_AI_DIRS
+                or name.endswith(".lock") or name.split(".")[0] == "state"):
+            return "output_path_bridge_owned_refused"
+    return None
+
+
+def normalize_output(project, raw, index):
+    """One host-declared output: project-relative regular-file path, no indirection."""
+    where = {"output_index": index}
+    if not isinstance(raw, str) or not raw or len(raw) > OUTPUT_PATH_LIMIT:
+        raise Blocked("output_path_invalid", where)
+    if (any(ord(char) < 32 or ord(char) == 127 or char in "  " for char in raw)
+            or any(char in OUTPUT_FORBIDDEN_CHARS for char in raw)):
+        raise Blocked("output_path_unsupported_characters", where)
+    try:
+        raw.encode("utf-8")
+    except UnicodeEncodeError:
+        raise Blocked("output_path_unsupported_characters", where)
+    if raw.startswith("/") or raw == "~" or raw.startswith("~/"):
+        raise Blocked("output_path_must_be_project_relative", where)
+    if raw.endswith("/"):
+        raise Blocked("output_path_must_be_regular_file", where)
+    parts = [part for part in raw.split("/") if part not in ("", ".")]
+    if ".." in parts:
+        raise Blocked("output_path_traversal_refused", where)
+    if not parts:
+        raise Blocked("output_path_invalid", where)
+    reason = output_owned_reason(parts)
+    if reason:
+        raise Blocked(reason, where)
+    current = project
+    for position, part in enumerate(parts):
+        current = current / part
+        try:
+            info = os.lstat(str(current))
+        except (FileNotFoundError, NotADirectoryError):
+            break
+        except OSError:
+            raise Blocked("output_path_unreadable", where)
+        if stat.S_ISLNK(info.st_mode):
+            raise Blocked("output_path_symlink_refused", where)
+        if position == len(parts) - 1:
+            if not stat.S_ISREG(info.st_mode):
+                raise Blocked("output_path_must_be_regular_file", where)
+        elif not stat.S_ISDIR(info.st_mode):
+            raise Blocked("output_path_parent_not_directory", where)
+    return "/".join(parts)
+
+
+def validate_outputs(project, raw_outputs, workflow):
+    """The host-supplied --output list is the only source of authorized output scope."""
+    if not raw_outputs:
+        return []
+    if workflow == "consult":
+        raise Blocked("outputs_not_allowed_in_consult_workflow")
+    if len(raw_outputs) > OUTPUT_LIMIT:
+        raise Blocked("too_many_declared_outputs", {"limit": OUTPUT_LIMIT})
+    return list(dict.fromkeys(normalize_output(project, raw, index) for index, raw in enumerate(raw_outputs)))
+
+
+def snapshot_output(project, rel, budget):
+    """Existence, size and bounded hash only; never contents, never following symlinks."""
+    entry = {"state": "missing", "exists": False, "bytes": None, "sha256": None, "hash_status": "not_applicable"}
+    parts = rel.split("/")
+    current = project
+    try:
+        for position, part in enumerate(parts):
+            current = current / part
+            info = os.lstat(str(current))
+            last = position == len(parts) - 1
+            if stat.S_ISLNK(info.st_mode):
+                entry.update(state="symlink", exists=True)
+                return entry
+            if last and not stat.S_ISREG(info.st_mode):
+                entry.update(state="not_regular", exists=True)
+                return entry
+            if not last and not stat.S_ISDIR(info.st_mode):
+                entry["state"] = "not_regular"
+                return entry
+    except (FileNotFoundError, NotADirectoryError):
+        return entry
+    except OSError:
+        entry.update(state="unreadable", exists=True)
+        return entry
+    entry.update(state="regular", exists=True, bytes=info.st_size)
+    if info.st_size > OUTPUT_HASH_LIMIT:
+        entry["hash_status"] = "skipped_size_limit"
+        return entry
+    if info.st_size > budget["remaining"]:
+        entry["hash_status"] = "skipped_budget"
+        return entry
+    budget["remaining"] -= info.st_size
+    try:
+        fd = os.open(str(current), os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
+        with os.fdopen(fd, "rb") as handle:
+            if not stat.S_ISREG(os.fstat(handle.fileno()).st_mode):
+                entry.update(state="not_regular", bytes=None)
+                return entry
+            hasher, total = hashlib.sha256(), 0
+            for chunk in iter(lambda: handle.read(1048576), b""):
+                total += len(chunk)
+                if total > OUTPUT_HASH_LIMIT:
+                    entry.update(bytes=total, hash_status="skipped_size_limit")
+                    return entry
+                hasher.update(chunk)
+    except OSError:
+        entry.update(state="unreadable", bytes=None)
+        return entry
+    entry.update(bytes=total, sha256=hasher.hexdigest(), hash_status="hashed")
+    return entry
+
+
+def observe_outputs(project, outputs):
+    budget = {"remaining": OUTPUT_HASH_BUDGET}
+    return {rel: snapshot_output(project, rel, budget) for rel in outputs}
+
+
+def output_change(before, after):
+    old, new = before["state"], after["state"]
+    if "unreadable" in (old, new):
+        return "unknown"
+    if old == "missing" and new == "missing":
+        return "unchanged"
+    if old == "missing" and new == "regular":
+        return "created"
+    if old == "regular" and new == "missing":
+        return "deleted"
+    if old == "regular" and new == "regular":
+        if before["sha256"] and after["sha256"]:
+            return "unchanged" if before["sha256"] == after["sha256"] else "modified"
+        return "modified" if before["bytes"] != after["bytes"] else "unknown"
+    return "unknown" if old == new else "type_changed"
+
+
+def output_observations(outputs, before, after):
+    public = ("exists", "state", "bytes", "sha256", "hash_status")
+    return [{"path": rel, "change": output_change(before[rel], after[rel]),
+             "before": {key: before[rel][key] for key in public},
+             "after": {key: after[rel][key] for key in public}} for rel in outputs]
+
+
+def parse_permission_rule(entry):
+    """None: unrelated tool. 'malformed': looks like a file-tool rule but is unparseable."""
+    match = PERMISSION_RULE.fullmatch(entry)
+    if match is None:
+        return "malformed" if PERMISSION_TOOL_HINT.match(entry) else None
+    tool, specifier = match.group(1), match.group(2)
+    if tool not in PERMISSION_TOOLS:
+        return "malformed" if tool.casefold() in {name.casefold() for name in PERMISSION_TOOLS} else None
+    return tool, specifier
+
+
+def read_permission_source(label, kind, path):
+    source = {"source": label, "kind": kind, "status": "ok", "managed_only": False,
+              "rules": {"allow": [], "ask": [], "deny": []}}
+    try:
+        no_symlink(path)
+        if not path.exists():
+            return None
+        data = json.loads(read_bytes(path).decode("utf-8"))
+    except Blocked as error:
+        source["status"] = "oversized" if error.reason == "file_too_large" else "unreadable"
+        return source
+    except (ValueError, UnicodeDecodeError, RecursionError):
+        source["status"] = "malformed"
+        return source
+    except OSError:
+        source["status"] = "unreadable"
+        return source
+    permissions = data.get("permissions") if isinstance(data, dict) else None
+    if not isinstance(data, dict) or not (permissions is None or isinstance(permissions, dict)):
+        source["status"] = "malformed"
+        return source
+    source["managed_only"] = kind == "managed" and data.get("allowManagedPermissionRulesOnly") is True
+    for name in ("allow", "ask", "deny"):
+        entries = (permissions or {}).get(name, [])
+        if not isinstance(entries, list) or not all(isinstance(entry, str) for entry in entries):
+            source.update(status="malformed", rules={"allow": [], "ask": [], "deny": []})
+            return source
+        if len(entries) > PERMISSION_RULE_LIMIT or any(len(entry) > 2048 for entry in entries):
+            source.update(status="oversized", rules={"allow": [], "ask": [], "deny": []})
+            return source
+        source["rules"][name] = [rule for rule in map(parse_permission_rule, entries) if rule is not None]
+    return source
+
+
+def permission_source_paths(project):
+    """Confirmed local permission sources only; ancestors and user settings.local are not assumed."""
+    home = Path.home().resolve()
+    paths = [("user_settings", "user", home / ".claude" / "settings.json"),
+             ("project_settings", "project", project / ".claude" / "settings.json"),
+             ("project_local_settings", "project", project / ".claude" / "settings.local.json")]
+    primary = git_primary_checkout(project)
+    if primary is not None and primary != project:
+        # The session's own directory stays the anchor for /path rules in this file.
+        paths.append(("worktree_primary_local_settings", "project", primary / ".claude" / "settings.local.json"))
+    paths.append(("managed_settings", "managed", MANAGED_SETTINGS_DIR / "managed-settings.json"))
+    dropins = MANAGED_SETTINGS_DIR / "managed-settings.d"
+    no_symlink(dropins)
+    if dropins.is_dir():
+        for index, path in enumerate(sorted(dropins.glob("*.json"))):
+            if not path.name.startswith(".") and (path.is_file() or path.is_symlink()):
+                paths.append(("managed_dropin_" + str(index), "managed", path))
+    return paths
+
+
+def permission_anchor(text, kind, project, home):
+    """Absolute form of a rule path prefix, or None when its anchor is not unambiguous."""
+    if text.startswith("//"):
+        return text[1:]
+    if text.startswith("~/"):
+        return str(home) + text[1:]
+    if text.startswith("~"):
+        return None
+    if text.startswith("/"):
+        if kind == "user":
+            return str(home / ".claude") + text
+        return str(project) + text if kind == "project" else None
+    if text.startswith("./"):
+        return str(project) + text[1:]
+    return str(project) + "/" + text
+
+
+def classify_permission_path(spec, kind, project, home):
+    """(form, absolute value, bare filename). Only literal paths are ever treated as exact."""
+    if (not spec or spec != spec.strip() or len(spec) > 1024 or ".." in spec.split("/")
+            or any(ord(char) < 32 or ord(char) == 127 for char in spec)):
+        return "ambiguous", None, False
+    glob = next((index for index, char in enumerate(spec) if char in PERMISSION_GLOB_CHARS), None)
+    anchored = permission_anchor(spec if glob is None else spec[:glob], kind, project, home)
+    if anchored is None:
+        return "ambiguous", None, False
+    if glob is not None:
+        return "pattern", anchored[:anchored.rfind("/") + 1], False
+    value = posixpath.normpath(anchored)
+    if spec.endswith("/") or spec.split("/")[-1] == ".":
+        return "directory", value.rstrip("/") + "/", False
+    return "literal", value, "/" not in spec
+
+
+def permission_relation(spec, kind, target, project, home):
+    """exact | covers | maybe | None. 'maybe' means a rule could apply but is not provable."""
+    form, value, bare = classify_permission_path(spec, kind, project, home)
+    folded = target.casefold()
+    if form == "ambiguous":
+        return "maybe"
+    if form == "pattern":
+        return "maybe" if folded.startswith(value.casefold()) else None
+    if form == "directory":
+        return "covers" if folded.startswith(value.casefold()) else None
+    if value == target:
+        return "exact"
+    folded_value = value.casefold()
+    if folded_value == folded:
+        return "maybe"
+    if folded.startswith(folded_value + "/"):
+        return "covers"
+    if bare and posixpath.basename(folded_value) in folded.split("/"):
+        return "maybe"
+    return None
+
+
+def classify_output_target(rel, project, home, sources, managed_only):
+    target = str(project / rel)
+    deny_or_ask = unknown = exact = unknown_allow = False
+    reasons = set()
+    for source in sources:
+        if source["status"] != "ok":
+            unknown = True
+            reasons.add("source_unreadable_or_malformed")
+            continue
+        for list_name in ("deny", "ask", "allow"):
+            if list_name == "allow" and managed_only and source["kind"] != "managed":
+                continue
+            for rule in source["rules"][list_name]:
+                if rule == "malformed":
+                    if list_name == "allow":
+                        unknown_allow = True
+                    else:
+                        unknown = True
+                    reasons.add("malformed_rule")
+                    continue
+                tool, spec = rule
+                if list_name == "allow" and tool != "Edit":
+                    continue
+                if spec is None:
+                    # A bare tool rule is broad: it blocks as deny/ask, but as allow it is not
+                    # evidence of a precise grant, only related broad coverage.
+                    relation = "exact" if list_name != "allow" else "maybe"
+                else:
+                    relation = permission_relation(spec, source["kind"], target, project, home)
+                if relation is None:
+                    continue
+                if list_name == "allow":
+                    if relation == "exact":
+                        exact = True
+                    else:
+                        unknown_allow = True
+                        reasons.add("related_pattern_or_ambiguous_rule")
+                elif relation in ("exact", "covers"):
+                    deny_or_ask = True
+                else:
+                    unknown = True
+                    reasons.add("related_pattern_or_ambiguous_rule")
+    if deny_or_ask:
+        status = "deny_or_ask_may_apply"
+    elif unknown:
+        status = "unknown"
+    elif exact:
+        status = "static_covered"
+    elif unknown_allow:
+        status = "unknown"
+    else:
+        status = "missing_rule"
+    return {"path": rel, "status": status,
+            "reason_codes": sorted(reasons) if status in {"unknown", "deny_or_ask_may_apply"} else []}
+
+
+def output_permission_preflight(project, outputs):
+    """Conservative static check of exact Edit grants; native CLI still enforces permission.
+
+    Only fixed codes and counts leave this function: no rule text, no settings values.
+    """
+    home = Path.home().resolve()
+    sources = [source for source in (read_permission_source(*item) for item in permission_source_paths(project))
+               if source is not None]
+    managed_only = any(source["managed_only"] for source in sources if source["status"] == "ok")
+    targets = [classify_output_target(rel, project, home, sources, managed_only) for rel in outputs]
+    ignored = sum(1 for source in sources for rule in source["rules"]["allow"]
+                  if rule != "malformed" and rule[0] in ("Write", "MultiEdit", "NotebookEdit"))
+    return {"coverage": "local_file_scan", "ready": all(item["status"] == "static_covered" for item in targets),
+            "targets": targets,
+            "sources_scanned": [{"source": source["source"], "status": source["status"]} for source in sources],
+            "managed_permission_rules_only": managed_only, "non_edit_allow_rules_ignored": ignored,
+            "limitations": list(PERMISSION_LIMITATIONS),
+            "note": "Static exact-rule check only; native Claude Code enforces the effective permission."}
+
+
 def run_probe(executable, args, project, accepted_codes=(0,)):
     try:
         result = subprocess.run([executable] + args, cwd=str(project), env=cli_environment(),
@@ -523,7 +911,7 @@ def run_probe(executable, args, project, accepted_codes=(0,)):
     return result.stdout.decode("utf-8", "replace")
 
 
-def cli_info(executable, config, project, workflow="standard"):
+def cli_info(executable, config, project, workflow="standard", stream=False):
     raw_version = run_probe(executable, ["--version"], project)
     match = re.search(r"\b(\d+\.\d+\.\d+)\b", raw_version)
     version = match.group(1) if match else "unknown"
@@ -535,7 +923,8 @@ def cli_info(executable, config, project, workflow="standard"):
     verified = config.get("verified_cli_flags", [])
     if not isinstance(verified, list) or not all(isinstance(f, str) for f in verified):
         raise Blocked("invalid_verified_cli_flags")
-    required = REQUIRED_FLAGS + (("--tools", "--strict-mcp-config", "--mcp-config", "--system-prompt-snapshot") if workflow == "consult" else ())
+    required = (REQUIRED_FLAGS + (("--tools", "--strict-mcp-config", "--mcp-config", "--system-prompt-snapshot") if workflow == "consult" else ())
+                + (("--verbose",) if stream else ()))
     unsupported = [flag for flag in required if flag not in help_text and flag not in verified]
     return version, unsupported
 
@@ -856,49 +1245,82 @@ execution from assumptions, permission denial and unavailable evidence.
     return "\n\n".join(sections)
 
 
-def run_inference(command, prompt, project, timeout):
-    started = time.monotonic()
-    timings = {"provenance": "bridge_monotonic"}
-    def finish(outcome, session=None):
-        timings.update(cli_finished_at=timestamp(), cli_wall_ms=round((time.monotonic() - started) * 1000, 3))
-        outcome["timings"] = timings
-        return outcome, session
+def signal_name(number):
     try:
-        proc = subprocess.Popen(command, cwd=str(project), env=cli_environment(),
-                                stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                start_new_session=True)
-    except OSError:
-        return finish({"status": "failed", "claude_exit_code": None, "reason": "claude_launch_failed"})
-    timings["cli_spawned_at"] = timestamp()
-    try:
-        stdout, _stderr = proc.communicate(prompt.encode("utf-8"), timeout=timeout)
-    except subprocess.TimeoutExpired:
-        try:
-            os.killpg(proc.pid, signal.SIGTERM)
-        except ProcessLookupError:
-            pass
-        try:
-            proc.communicate(timeout=2)
-        except subprocess.TimeoutExpired:
-            try:
-                os.killpg(proc.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-            proc.communicate()
-        return finish({"status": "timeout", "claude_exit_code": proc.returncode,
-                       "reason": "Completion unknown after timeout; no automatic retry."})
-    outcome = {"claude_exit_code": proc.returncode, "permission_denials": []}
-    if len(stdout) > 10485760:
-        outcome.update(status="failed", reason="claude_output_too_large")
-        return finish(outcome)
+        return signal.Signals(number).name
+    except ValueError:
+        return "SIG" + str(number)
+
+
+def stderr_code(stderr_bytes):
+    return "present_not_recorded" if stderr_bytes else "empty"
+
+
+def inspect_cli_output(stdout, stdout_bytes, stderr_bytes):
+    """Finite diagnostics for CLI streams: byte counts and fixed codes, never text.
+
+    stdout holds at most CLI_STDOUT_LIMIT retained bytes; stdout_bytes is the full count.
+    """
+    diagnostics = {"stdout_bytes": stdout_bytes, "stderr_bytes": stderr_bytes, "stderr": stderr_code(stderr_bytes)}
+    if stdout_bytes > CLI_STDOUT_LIMIT:
+        diagnostics["stdout_format"] = "too_large"
+        return diagnostics, None
+    if not stdout.strip():
+        diagnostics["stdout_format"] = "empty"
+        return diagnostics, None
     try:
         payload = json.loads(stdout.decode("utf-8"))
-    except (ValueError, UnicodeDecodeError):
-        outcome.update(status="failed", reason="claude_nonzero; no automatic retry or API fallback" if proc.returncode != 0 else "claude_result_json_unavailable")
-        return finish(outcome)
+    except UnicodeDecodeError:
+        diagnostics["stdout_format"] = "not_utf8"
+        return diagnostics, None
+    except (ValueError, RecursionError):
+        diagnostics["stdout_format"] = "malformed"
+        return diagnostics, None
     if not isinstance(payload, dict):
-        outcome.update(status="failed", reason="claude_result_json_unavailable")
-        return finish(outcome)
+        diagnostics["stdout_format"] = "json_non_object"
+        return diagnostics, None
+    diagnostics["stdout_format"] = "json_object"
+    return diagnostics, payload
+
+
+def safe_tool_name(value):
+    return value if isinstance(value, str) and value in KNOWN_DENIAL_TOOLS else "Other"
+
+
+def final_result_metadata(payload):
+    """Denials, models and session status come only from an official final result object.
+
+    Returns (metadata, invalid_denials). A missing field is 'unavailable', never an empty list.
+    """
+    metadata = {"permission_denials": None, "permission_denials_status": "unavailable",
+                "actual_models": [], "actual_models_status": "unavailable",
+                "returned_session_id_status": "unavailable"}
+    if payload is None or payload.get("type") != "result":
+        return metadata, False
+    invalid = False
+    if "permission_denials" in payload:
+        denials = payload["permission_denials"]
+        if isinstance(denials, list):
+            metadata["permission_denials"] = [safe_tool_name(d.get("tool_name") if isinstance(d, dict) else None)
+                                              for d in denials[:RESULT_LIST_LIMIT]]
+            metadata["permission_denials_status"] = "listed" if denials else "none_reported"
+            if len(denials) > RESULT_LIST_LIMIT:
+                metadata["permission_denials_truncated"] = True
+        else:
+            invalid = True
+    usage = payload.get("modelUsage")
+    if isinstance(usage, dict):
+        names = sorted(name for name in usage if isinstance(name, str) and re.fullmatch(r"claude-[a-z0-9.-]{1,100}", name))
+        metadata["actual_models"] = names[:50]
+        metadata["actual_models_status"] = "reported" if names else "none_reported"
+    returned = payload.get("session_id")
+    metadata["returned_session_id_status"] = "absent" if returned is None else "returned" if valid_session(returned) else "invalid"
+    return metadata, invalid
+
+
+def record_official_timings(payload, timings):
+    if payload is None or payload.get("type") != "result":
+        return
     official = {}
     for key in ("duration_ms", "duration_api_ms"):
         value = payload.get(key)
@@ -911,50 +1333,340 @@ def run_inference(command, prompt, project, timeout):
                 official[key] = value
     if official:
         timings["official_cli"] = {**official, "provenance": "official_cli_result"}
-    usage = payload.get("modelUsage")
-    outcome["actual_models"] = sorted(name for name in usage if isinstance(name, str) and re.fullmatch(r"claude-[a-z0-9.-]{1,100}", name)) if isinstance(usage, dict) else []
-    denials = payload.get("permission_denials", [])
-    if not isinstance(denials, list):
+
+
+class CliPump:
+    """Bounded, nonblocking pipe consumer for one CLI process.
+
+    Writes the prompt while draining stdout and stderr, so neither side can deadlock on a full pipe.
+    stderr is only counted. JSON mode retains at most CLI_STDOUT_LIMIT bytes of stdout; stream mode
+    retains one frame at a time, keeps counts and whitelisted metadata, and keeps the final result object.
+    """
+
+    def __init__(self, proc, prompt, stream):
+        self.proc, self.stream, self.prompt, self.offset = proc, stream, prompt, 0
+        self.stdout_bytes = self.stderr_bytes = 0
+        self.retained, self.line = bytearray(), bytearray()
+        self.events = {name: 0 for name in STREAM_EVENT_TYPES + ("other",)}
+        self.invalid_lines = self.denial_events = 0
+        self.denials, self.final = [], None
+        self.ended = None
+        # First stop that makes received bytes untrustworthy; stays set even if a different stop came first.
+        self.untrusted = None
+        self.exit_seen_at = None
+        self.selector = selectors.DefaultSelector()
+        for name, handle, mode in (("stdin", proc.stdin, selectors.EVENT_WRITE),
+                                   ("stdout", proc.stdout, selectors.EVENT_READ),
+                                   ("stderr", proc.stderr, selectors.EVENT_READ)):
+            os.set_blocking(handle.fileno(), False)
+            self.selector.register(handle, mode, name)
+
+    def stop(self, reason):
+        if self.ended is None:
+            self.ended = reason
+        if reason in UNTRUSTED_STOPS and self.untrusted is None:
+            self.untrusted = reason
+
+    def release(self, handle):
+        with contextlib.suppress(KeyError, ValueError, OSError):
+            self.selector.unregister(handle)
+        with contextlib.suppress(OSError):
+            handle.close()
+
+    def close(self):
+        for handle in (self.proc.stdin, self.proc.stdout, self.proc.stderr):
+            self.release(handle)
+        self.selector.close()
+
+    def handle_stdin(self):
+        try:
+            written = os.write(self.proc.stdin.fileno(), self.prompt[self.offset:self.offset + IO_CHUNK])
+        except (BlockingIOError, InterruptedError):
+            return
+        except OSError:
+            # The CLI closed its stdin early; whatever it does next is judged by its output.
+            self.release(self.proc.stdin)
+            return
+        self.offset += written
+        if self.offset >= len(self.prompt):
+            self.release(self.proc.stdin)
+
+    def read_chunk(self, handle):
+        try:
+            data = os.read(handle.fileno(), IO_CHUNK)
+        except (BlockingIOError, InterruptedError):
+            return None
+        except OSError:
+            data = b""
+        if not data:
+            self.release(handle)
+        return data
+
+    def handle_event(self, name):
+        if name == "stdin":
+            self.handle_stdin()
+        elif name == "stderr":
+            data = self.read_chunk(self.proc.stderr)
+            if data:
+                self.stderr_bytes += len(data)  # counted, never retained
+                if self.stderr_bytes > CLI_STDERR_LIMIT:
+                    self.stop("stderr_flood")
+        else:
+            data = self.read_chunk(self.proc.stdout)
+            if data:
+                self.feed_stdout(data)
+
+    def feed_stdout(self, data):
+        self.stdout_bytes += len(data)
+        if self.untrusted:
+            return
+        if not self.stream:
+            if self.stdout_bytes > CLI_STDOUT_LIMIT:
+                self.stop("oversized")
+            else:
+                self.retained += data
+            return
+        if self.stdout_bytes > STREAM_TOTAL_LIMIT:
+            self.stop("oversized")
+            self.line.clear()
+            return
+        self.line += data
+        start = 0
+        while not self.untrusted:
+            end = self.line.find(b"\n", start)
+            if end < 0:
+                break
+            if end - start > STREAM_FRAME_LIMIT:
+                self.stop("frame_too_large")
+                break
+            self.frame(bytes(self.line[start:end]))
+            start = end + 1
+        del self.line[:start]
+        if len(self.line) > STREAM_FRAME_LIMIT:
+            self.stop("frame_too_large")
+        if self.untrusted:
+            self.line.clear()
+
+    def frame(self, raw):
+        """One newline-delimited event: counted and, for two official shapes only, acted on."""
+        if not raw.strip():
+            return
+        try:
+            event = json.loads(raw.decode("utf-8"))
+        except (ValueError, UnicodeDecodeError, RecursionError):
+            event = None
+        if not isinstance(event, dict):
+            # An unparseable line may have been the denial or the final result: fail closed.
+            self.invalid_lines += 1
+            self.stop("critical_frame")
+            return
+        kind = event.get("type")
+        self.events[kind if kind in STREAM_EVENT_TYPES else "other"] += 1
+        if kind == "system" and event.get("subtype") == "permission_denied":
+            # Only this exact top-level shape counts; text mentioning a denial never does.
+            self.denial_events += 1
+            if len(self.denials) < RESULT_LIST_LIMIT:
+                self.denials.append(safe_tool_name(event.get("tool_name")))
+            self.stop("permission_denied")
+        elif kind == "result":
+            if self.final is not None:
+                self.invalid_lines += 1
+                self.stop("critical_frame")
+            else:
+                self.final = event
+
+    def finish_stream(self):
+        """Judge the unterminated trailing frame at EOF; may add an untrusted stop."""
+        if self.stream and self.line.strip() and not self.untrusted:
+            if len(self.line) > STREAM_FRAME_LIMIT:
+                self.stop("frame_too_large")
+            else:
+                self.frame(bytes(self.line))
+        self.line.clear()
+
+    def pump(self, deadline, draining=False):
+        """Run until EOF on both output pipes, a stop reason, or the monotonic deadline."""
+        while self.selector.get_map():
+            now = time.monotonic()
+            if now >= deadline:
+                return "deadline"
+            if not draining and self.ended is not None:
+                return "stopped"
+            if self.proc.poll() is not None:
+                if self.exit_seen_at is None:
+                    self.exit_seen_at = now
+                elif now - self.exit_seen_at >= EXIT_DRAIN_GRACE:
+                    return "pipes_held_after_exit"
+            for key, _mask in self.selector.select(min(deadline - now, 0.25)):
+                self.handle_event(key.data)
+        return "eof"
+
+
+def terminate_group(proc):
+    """SIGTERM the whole process group, wait a bounded time, then SIGKILL and reap."""
+    def send(number):
+        with contextlib.suppress(OSError):
+            os.killpg(proc.pid, number)
+    sent = "SIGTERM"
+    send(signal.SIGTERM)
+    limit = time.monotonic() + TERMINATE_GRACE
+    while proc.poll() is None and time.monotonic() < limit:
+        time.sleep(0.02)
+    if proc.poll() is None:
+        sent = "SIGKILL"
+    send(signal.SIGKILL)  # stragglers that ignored SIGTERM or outlived the leader
+    with contextlib.suppress(subprocess.TimeoutExpired):
+        proc.wait(timeout=TERMINATE_GRACE)
+    return sent
+
+
+FORCED_FAILURES = {"oversized": "claude_output_too_large", "frame_too_large": "claude_stream_frame_too_large",
+                   "critical_frame": "claude_stream_malformed_frame", "stderr_flood": "claude_stderr_too_large"}
+TERMINATION_REASONS = {"timeout": "timeout", "oversized": "oversized_stdout", "frame_too_large": "oversized_stream_frame",
+                       "critical_frame": "malformed_stream_frame", "stderr_flood": "stderr_flood",
+                       "permission_denied": "permission_denied_event"}
+
+
+def run_inference(command, prompt, project, timeout, stream=False):
+    started = time.monotonic()
+    timings = {"provenance": "bridge_monotonic"}
+    def finish(outcome, session=None):
+        timings.update(cli_finished_at=timestamp(), cli_wall_ms=round((time.monotonic() - started) * 1000, 3))
+        outcome["timings"] = timings
+        return outcome, session
+    try:
+        proc = subprocess.Popen(command, cwd=str(project), env=cli_environment(),
+                                stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                start_new_session=True)
+    except OSError:
+        return finish({"status": "failed", "claude_exit_code": None, "reason": "claude_launch_failed",
+                       **final_result_metadata(None)[0]})
+    timings["cli_spawned_at"] = timestamp()
+    deadline = time.monotonic() + timeout
+    pump = CliPump(proc, prompt.encode("utf-8"), stream)
+    state = pump.pump(deadline)
+    if state == "eof" and proc.poll() is None:
+        # Output pipes closed but the process lives on: still bounded by the same deadline.
+        with contextlib.suppress(subprocess.TimeoutExpired):
+            proc.wait(timeout=max(0.0, deadline - time.monotonic()))
+        if proc.poll() is None:
+            state = "deadline"
+    ended = pump.ended or ("timeout" if state == "deadline" else "pipes_held_after_exit" if state == "pipes_held_after_exit" else None)
+    signal_sent = None
+    if ended is not None:
+        signal_sent = terminate_group(proc)
+        # Bytes the CLI had already written (possibly a complete final result) are still collected.
+        pump.pump(time.monotonic() + DRAIN_GRACE, draining=True)
+    pump.finish_stream()
+    pump.close()
+    # The trailing frame is judged only now: refresh the primary reason, but never override a
+    # known timeout or permission-denied stop. An EOF-only finding sends no signal.
+    if pump.ended is not None and ended in (None, "pipes_held_after_exit"):
+        ended = pump.ended
+    returned = proc.returncode
+    if stream:
+        stdout_format = ("too_large" if pump.untrusted in ("oversized", "frame_too_large") else "stream_malformed" if pump.untrusted == "critical_frame"
+                         else "empty" if pump.stdout_bytes == 0 else "stream_json")
+        diagnostics = {"stdout_bytes": pump.stdout_bytes, "stderr_bytes": pump.stderr_bytes,
+                       "stderr": stderr_code(pump.stderr_bytes), "stdout_format": stdout_format}
+        payload = pump.final
+    else:
+        diagnostics, payload = inspect_cli_output(bytes(pump.retained), pump.stdout_bytes, pump.stderr_bytes)
+    if pump.untrusted:
+        payload = None  # whatever stop came first, nothing received is trusted as a final result
+    if ended == "pipes_held_after_exit":
+        diagnostics["descendants_held_pipes"] = True
+    metadata, invalid_denials = final_result_metadata(payload)
+    sid = payload.get("session_id") if metadata["returned_session_id_status"] == "returned" else None
+    outcome = {"claude_exit_code": returned, "cli_output": diagnostics, **metadata}
+    if stream:
+        outcome["stream_events"] = {"events": pump.events, "invalid_lines": pump.invalid_lines,
+                                    "permission_denied_events": pump.denial_events,
+                                    "final_result_seen": pump.final is not None,
+                                    "final_result_trusted": pump.final is not None and not pump.untrusted}
+    record_official_timings(payload, timings)
+    if ended is not None and ended != "pipes_held_after_exit":
+        outcome["termination"] = {
+            "reason": TERMINATION_REASONS[ended], "signal_sent": signal_sent,
+            "exit_code": returned if returned is not None and returned >= 0 else None,
+            "exit_signal": signal_name(-returned) if returned is not None and returned < 0 else None,
+            "completion": "incomplete" if ended == "permission_denied" else "unknown"}
+        if ended == "timeout":
+            outcome["termination"]["timeout_seconds"] = timeout
+    if ended == "timeout":
+        # Forced termination is never completion, even if a complete final result was delivered.
+        outcome.update(status="timeout", reason="Completion unknown after timeout; no automatic retry.")
+        return finish(outcome, sid)
+    if ended == "permission_denied":
+        # Conservative: the first explicit official denial ends the batch; no silent retry.
+        outcome.update(status="needs_permission", permission_denials=pump.denials, permission_denials_status="listed",
+                       reason="Official permission_denied event; stopped at the first explicit denial; task not complete.")
+        if pump.denial_events > len(pump.denials):
+            outcome["permission_denials_truncated"] = True
+        return finish(outcome, sid)
+    if ended in FORCED_FAILURES:
+        outcome.update(status="failed", reason=FORCED_FAILURES[ended])
+        return finish(outcome)
+    if payload is None:
+        stdout_format = diagnostics["stdout_format"]
+        if stdout_format == "too_large":
+            reason = "claude_output_too_large"
+        elif stream and returned == 0:
+            reason = "claude_stream_final_result_unavailable"
+        elif stdout_format == "json_non_object" or returned == 0:
+            reason = "claude_result_json_unavailable"
+        else:
+            reason = "claude_nonzero; no automatic retry or API fallback"
+        outcome.update(status="failed", reason=reason)
+        return finish(outcome)
+    if invalid_denials:
         outcome.update(status="failed", reason="invalid_permission_denials_metadata")
-        return finish(outcome)
-    known_tools = {"Bash", "Read", "Write", "Edit", "Glob", "Grep", "WebFetch", "WebSearch", "Agent", "Task"}
-    outcome["permission_denials"] = [d.get("tool_name") if isinstance(d, dict) and d.get("tool_name") in known_tools else "Other" for d in denials[:100]]
-    if proc.returncode != 0:
+        return finish(outcome, sid)
+    if returned != 0:
         outcome.update(status="failed", reason="claude_nonzero; no automatic retry or API fallback")
-        return finish(outcome)
-    if denials:
+        return finish(outcome, sid)
+    if metadata["permission_denials_status"] == "listed":
         outcome.update(status="needs_permission", reason="Normal Claude Code permission denied; task not complete.")
-        return finish(outcome)
+        return finish(outcome, sid)
     if payload.get("type") != "result" or payload.get("subtype") != "success" or payload.get("is_error") is not False:
         outcome.update(status="failed", reason="claude_reported_error_or_unrecognized_result")
-        return finish(outcome)
+        return finish(outcome, sid)
     structured = payload.get("structured_output")
     if not isinstance(structured, dict):
         try:
             structured = json.loads(payload.get("result", ""))
-        except (ValueError, TypeError):
+        except (ValueError, TypeError, RecursionError):
             structured = None
     if not isinstance(structured, dict) or any(key not in structured for key in RESULT_FIELDS):
         outcome.update(status="failed", reason="structured_result_unavailable")
-        return finish(outcome)
-    safe_result = {}
+        return finish(outcome, sid)
+    safe_result, truncated = {}, []
     for key in RESULT_FIELDS:
         value = structured[key]
         if key in LIST_FIELDS:
             if not isinstance(value, list) or not all(isinstance(v, str) for v in value):
                 outcome.update(status="failed", reason="structured_result_schema_invalid")
-                return finish(outcome)
-            safe_result[key] = [scrub(v) for v in value[:100]]
+                return finish(outcome, sid)
+            scrubbed = [scrub(v, limit=None) for v in value[:RESULT_LIST_LIMIT]]
+            if any(len(v) > RESULT_STRING_LIMIT for v in scrubbed):
+                truncated.append(key + "[element]")
+            if len(value) > RESULT_LIST_LIMIT:
+                truncated.append(key + "[entries]")
+            safe_result[key] = [v[:RESULT_STRING_LIMIT] for v in scrubbed]
         else:
             if not isinstance(value, str):
                 outcome.update(status="failed", reason="structured_result_schema_invalid")
-                return finish(outcome)
-            safe_result[key] = scrub(value)
-    sid = payload.get("session_id")
-    if sid is not None and not valid_session(sid):
+                return finish(outcome, sid)
+            scrubbed = scrub(value, limit=None)
+            if len(scrubbed) > RESULT_STRING_LIMIT:
+                truncated.append(key)
+            safe_result[key] = scrubbed[:RESULT_STRING_LIMIT]
+    if metadata["returned_session_id_status"] == "invalid":
         outcome.update(status="failed", reason="returned_session_id_invalid")
         return finish(outcome)
-    outcome.update(status="complete", result=safe_result,
+    # CLI completion stays distinct from delivery: truncated fields mean an incomplete result.
+    outcome.update(status="complete", result=safe_result, result_complete=not truncated,
+                   truncated_result_fields=truncated,
                    model_tests_independently_verified=False, session_available=sid is not None)
     return finish(outcome, sid)
 
@@ -965,11 +1677,16 @@ def record_run(project, outcome, mode, version, session, before, after, started=
     metadata = {"timestamp": stamp, "mode": mode, "claude_version": version,
                 "status": outcome["status"], "claude_exit_code": outcome.get("claude_exit_code"),
                 "status_basis": "CLI result at evidence-write attempt; final local evidence/session/cache completion is reported by the run outcome.",
-                "session_id": session, "permission_denials": outcome.get("permission_denials", []),
+                "session_id": session,
+                # An absent final-result field is unavailable evidence, never an implicit empty list.
+                "permission_denials": outcome.get("permission_denials"),
+                "permission_denials_status": outcome.get("permission_denials_status", "unavailable"),
                 "actual_models": outcome.get("actual_models", []),
                 "git_before": public_snapshot(before), "git_after": public_snapshot(after)}
     metadata.update({key: outcome[key] for key in EFFORT_AUDIT_FIELDS if key in outcome})
     metadata.update({key: outcome[key] for key in CONSULT_LOG_FIELDS if key in outcome})
+    metadata.update({key: outcome[key] for key in RUN_LOG_FIELDS if key in outcome})
+    metadata.setdefault("actual_models_status", "unavailable")
     directory = ai / "logs"
     secure_directory(directory)
     filename = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%S") + "." + uuid.uuid4().hex[:8] + ".json"
@@ -977,6 +1694,11 @@ def record_run(project, outcome, mode, version, session, before, after, started=
     handoff = ai / "HANDOFF.md"
     original = read_bytes(handoff)
     backup(ai, "HANDOFF", original)
+    denial_status = outcome.get("permission_denials_status", "unavailable")
+    denials = outcome.get("permission_denials") or []
+    denial_text = denial_status + (" (" + ", ".join(denials) + ")" if denials else
+                                   " (no final-result denial field; not treated as none)" if denial_status == "unavailable" else "")
+    models_status = outcome.get("actual_models_status", "unavailable")
     block = ["", "<!-- claude-bridge:" + uuid.uuid4().hex + " -->",
              "## Claude Bridge evidence — " + stamp, "", "Current Status: " + outcome["status"],
              "Last Agent: Claude Code (" + mode + ", " + version + ")",
@@ -985,14 +1707,30 @@ def record_run(project, outcome, mode, version, session, before, after, started=
              "Effort selection reason: " + outcome.get("effort_reason", "not supplied"),
              "Effective effort: unknown (requested flag is not proof of the model's internal reasoning or silently applied caps).",
              "Effort local-file policy metadata: " + json.dumps(outcome.get("effort_policy", {}), sort_keys=True),
-             "Actual model names from CLI: " + (", ".join(outcome.get("actual_models", [])) or "unknown"),
+             "Actual model names from CLI: " + (", ".join(outcome.get("actual_models", [])) or "unknown") + " (" + models_status + ")",
              "Claude CLI exit code: " + str(outcome.get("claude_exit_code")),
              "Completion: " + ("CLI completed; project outcome needs independent verification." if outcome["status"] == "complete" else "Task not complete; final work state unknown until independently checked."),
-             "Permission denials: " + (", ".join(outcome.get("permission_denials", [])) or "none reported / unavailable"),
-             "Session returned by CLI: " + (session or "none; previous successful state retained"),
+             "Permission denials: " + denial_text,
+             ("Session returned by CLI final result: " + session + " (reported; not saved unless status is complete)") if session
+             else "Session returned by CLI final result: none; previous successful state retained",
              "Session persistence: sessions.json is authoritative; saved only after a successful evidence write.",
              "Git before: " + json.dumps(public_snapshot(before), sort_keys=True),
              "Git after: " + json.dumps(public_snapshot(after), sort_keys=True)]
+    if outcome.get("cli_output"):
+        block.append("CLI output diagnostics (counts and fixed codes only): " + json.dumps(outcome["cli_output"], sort_keys=True))
+    if outcome.get("stream_events"):
+        block.append("Stream events (counts only; no event text kept): " + json.dumps(outcome["stream_events"], sort_keys=True))
+    if outcome.get("termination"):
+        block.append("Forced termination: " + json.dumps(outcome["termination"], sort_keys=True))
+    if "declared_outputs" in outcome:
+        block.append("Declared outputs (observation only; no overwrite prevention, no file bodies): " + ", ".join(
+            item["path"] + " " + item["change"] for item in outcome["declared_outputs"]))
+        block.append("Declared output static Edit-rule check: " + ", ".join(
+            item["path"] + " " + item["status"] for item in outcome["output_permission_preflight"]["targets"])
+            + "; native CLI enforces effective permission.")
+    if outcome.get("truncated_result_fields"):
+        block.append("Result delivery: INCOMPLETE; truncated fields: " + ", ".join(outcome["truncated_result_fields"])
+                     + ". Put long documents in files, not structured strings.")
     if outcome.get("result"):
         labels = {"Task": "Current Goal (Claude-reported)", "Summary": "Work Completed (Claude-reported)",
                   "FilesChanged": "Files Changed (Claude-reported)", "Tests": "Model-reported tests; not independently verified",
@@ -1067,8 +1805,21 @@ def progress(args, event, **metadata):
                          ensure_ascii=False, separators=(",", ":")), file=sys.stderr, flush=True)
 
 
+def validate_bounds(args):
+    low, high = MAX_TURNS_RANGE
+    if not low <= args.max_turns <= high:
+        raise Blocked("max_turns_out_of_bounds", {"allowed_range": str(low) + ".." + str(high)})
+    if not math.isfinite(args.timeout) or not 0 < args.timeout <= TIMEOUT_MAX_SECONDS:
+        raise Blocked("timeout_out_of_bounds", {"allowed_range": "0<seconds<=" + str(TIMEOUT_MAX_SECONDS)})
+
+
 def execute(project, runtime, args):
     started = time.monotonic()
+    validate_bounds(args)
+    stream = bool(getattr(args, "stream_events", False))
+    if stream and args.workflow == "consult":
+        raise Blocked("stream_events_not_allowed_in_consult_workflow")
+    outputs = validate_outputs(project, getattr(args, "outputs", None) or [], args.workflow)
     effort = effort_request(args)
     config, executable = runtime_config(runtime)
     validate_ai(project)
@@ -1089,14 +1840,21 @@ def execute(project, runtime, args):
         else:
             preview = make_prompt(project, args.task, args.mode, before)
             delivery, changed, truncated = "full", list(TEMPLATES) + ["Git"], []
-        return {"status": "dry_run", "project": str(project), "mode": args.mode,
+        preview_result = {"status": "dry_run", "project": str(project), "mode": args.mode,
                 "workflow": args.workflow,
                 "context_delivery": delivery, "changed_context_names": changed,
                 "truncated_context_names": truncated,
                 "unavailable_context_names": ["Git"] if not before["available"] else [],
                 "prompt_bytes": len(preview.encode("utf-8")), "resumed_session": previous,
                 "model": model or native_selection, "resume_session": previous,
-                "inference": False, "routing": routes, "prompt_sent": False, **effort}, 0
+                "inference": False, "routing": routes, "prompt_sent": False, **effort}
+        if stream:
+            preview_result["stream_events"] = True
+        if outputs:
+            # Read-only static report; a real run blocks on an unready preflight.
+            preview_result.update(declared_outputs=outputs,
+                                  output_permission_preflight=output_permission_preflight(project, outputs))
+        return preview_result, 0
     credits_guard(config, args.workflow)
     # Hold an advisory writer lock throughout validation, inference, and atomic state writes.
     with project_lock(project):
@@ -1105,11 +1863,18 @@ def execute(project, runtime, args):
         routes = route_guard(project)
         effort["effort_policy"] = routes["effort_policy"]
         previous = session_for(project, args.new_session)
+        output_preflight = None
+        if outputs:
+            # Missing static coverage blocks before any CLI probe or inference.
+            output_preflight = output_permission_preflight(project, outputs)
+            if not output_preflight["ready"]:
+                raise Blocked("declared_output_edit_permission_unconfirmed", {
+                    "declared_outputs": outputs, "output_permission_preflight": output_preflight})
         baseline = consult_cache(project, previous, args.mode) if args.workflow == "consult" else None
         # Delete before attempting delivery: a crash, failed resume or partial
         # reply must never imply that the resumed model received this context.
         invalidate_consult_cache(project)
-        command = [executable, "--print", "--output-format", "json", "--permission-mode", "manual",
+        command = [executable, "--print", "--output-format", "stream-json" if stream else "json", "--permission-mode", "manual",
                    "--permission-prompts", "none", "--max-turns", str(args.max_turns),
                    "--effort", effort["requested_effort"],
                    "--json-schema", json.dumps(SCHEMA, separators=(",", ":"))]
@@ -1120,7 +1885,9 @@ def execute(project, runtime, args):
         if args.workflow == "consult":
             command += ["--tools", "", "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}',
                         "--system-prompt-snapshot", "off"]
-        version, unsupported = cli_info(executable, config, project, args.workflow)
+        if stream:
+            command.append("--verbose")  # official requirement for stream-json with --print
+        version, unsupported = cli_info(executable, config, project, args.workflow, stream)
         if unsupported:
             raise Blocked("required_cli_flags_unverified", {"unsupported_flags": unsupported})
         auth = auth_status(executable, project)
@@ -1140,7 +1907,15 @@ def execute(project, runtime, args):
                      "preflight_wall_ms": round((time.monotonic() - started) * 1000, 3)}
         progress(args, "claude_start", workflow=args.workflow, mode=args.mode,
                  context_delivery=delivery, prompt_bytes=len(prompt.encode("utf-8")), resumed=bool(previous))
-        outcome, session = run_inference(command, prompt, project, args.timeout)
+        outputs_before = observe_outputs(project, outputs) if outputs else None
+        outcome, session = run_inference(command, prompt, project, args.timeout, stream)
+        if outputs:
+            # Observation only: no restore, no retry, no overwrite prevention, no sandbox.
+            outcome.update(declared_outputs=output_observations(outputs, outputs_before, observe_outputs(project, outputs)),
+                           output_permission_preflight=output_preflight,
+                           output_observation={"kind": "observation_only", "restores_or_prevents_overwrites": False,
+                                               "contents_recorded": False,
+                                               "note": "Existence, bytes and bounded hashes only; existing declared outputs may be intentionally edited."})
         outcome.update(effort)
         outcome["timings"].update(preflight)
         outcome.update(workflow=args.workflow, context_delivery=delivery,
@@ -1205,8 +1980,16 @@ def parser():
                               help="Codex auto choice or explicit user choice; requires --effort.")
             item.add_argument("--effort-reason", help="Short audit reason: one line, at most 160 characters; no task text or secrets.")
             item.add_argument("--new-session", action="store_true", help="Explicit fresh session; no silent retry.")
-            item.add_argument("--max-turns", type=int, default=3)
-            item.add_argument("--timeout", type=float, default=120)
+            item.add_argument("--output", action="append", dest="outputs", metavar="PATH",
+                              help="Host-declared output file, relative to the project; repeatable; standard workflow only. "
+                                   "Needs a static exact Edit rule in confirmed local settings. Observed, not sandboxed.")
+            item.add_argument("--stream-events", action="store_true",
+                              help="Opt-in, standard workflow only: official stream-json (needs --verbose). Stops at the first "
+                                   "explicit permission_denied event; keeps event counts only, never event text.")
+            item.add_argument("--max-turns", type=int, default=3,
+                              help="Integer 1..20 (default 3); other values are refused before inference.")
+            item.add_argument("--timeout", type=float, default=120,
+                              help="Finite seconds, 0<seconds<=3600 (default 120); other values are refused before inference.")
             item.add_argument("--dry-run", action="store_true", help="No inference, auth probe, prompt output or project writes.")
             item.add_argument("--progress", action="store_true", help="Safe start/finish metadata on stderr; stdout remains final JSON.")
     return p
@@ -1222,8 +2005,6 @@ def main(argv=None):
             result, code = doctor(project, args.runtime), 0
         else:
             args.task = task_text(project, args)
-            if not 1 <= args.max_turns <= 20 or not 0 < args.timeout <= 3600:
-                raise Blocked("max_turns_or_timeout_out_of_bounds")
             result, code = execute(project, args.runtime, args)
         emit(result)
         return code

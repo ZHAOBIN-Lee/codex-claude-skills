@@ -21,10 +21,13 @@ $claude-bridge 帮我解释这次失败。先检查本轮状态和必要元数�
 | 非订阅或 Provider 路线被拦 | 认证状态，以及返回的变量名、字段名 | 自己处理官方登录。不打印变量的值，也不改走 API |
 | effort 环境变量覆盖被拦 | 有没有非空的 `CLAUDE_CODE_EFFORT_LEVEL` | Codex 会说出变量名和冲突，设置怎么改由你决定，它不会自动删或绕过 |
 | 模型不可用，或额度用完 | 这次 CLI 的返回和账号的实际额度 | 如实报告，回到已授权的 GPT 任务。不买额外额度，不自动换模型 |
-| 权限被拒 | 被拒的具体操作在不在已有授权内 | 操作获得授权后再按正常权限重试，不放宽通配规则 |
+| 权限被拒（`needs_permission`） | `permission_denials_status` 和被拒的具体操作在不在已有授权内 | 先查实际文件。已有授权覆盖该精确操作时，补上精确规则再另行发起新调用；不放宽通配规则。见[权限与失败处理](08-permissions-and-failures.md) |
+| `declared_output_edit_permission_unconfirmed` | 每个 `--output` 的预检结论：`missing_rule`、`deny_or_ask_may_apply` 还是 `unknown` | 推理没有发生。适用的 deny/ask 是保护，要遵守，不要删除或绕过。若是已授权且不冲突的范围，可以检查并补上精确的 `Edit(/路径)`（`Write(路径)` 和裸 `Edit` 都不算精确授权）；真要改保护性策略，需要用户本人按现有权限来决定。见[权限与失败处理](08-permissions-and-failures.md) |
+| `max_turns_out_of_bounds`、`timeout_out_of_bounds` | 返回里的 `allowed_range`（max-turns 1..20，timeout 大于 0 且不超过 3600） | 改成范围内的值。调用没有发生 |
+| `claude_stream_malformed_frame`、`claude_stream_final_result_unavailable` | 流里有无法解析的行，或没有最终结果 | 当作未完成，先看实际文件。没有最终结果就没有模型和会话证据 |
 | 项目忙，或有锁 | 同一项目是不是还有调用在跑 | 等它，或者看看实际进程。别直接删锁，也别并发修改 |
 | `state_update_failed` | 推理完成没有，会话存了没有，哪些本地写入失败 | 结果和保存状态分开说，留好证据。别假定后面还能增量接续 |
-| 超时 | 是只有等待结束了，还是确实没完成 | 标明完成情况未知，先查必要的元数据。不要自动重发，免得任务重复 |
+| 超时 | 是只有等待结束了，还是确实没完成 | 标明完成情况未知，先查实际文件和必要的元数据。不要静默重发，免得任务重复；确要再做，说明范围另行发起 |
 
 第一次诊断、程序有变化、或者检查失败时，可以跑 Bridge 的 `doctor`。平时连续咨询，`run` 自己已经带了检查，不用每问一次就跑。Bridge 的 `doctor` 和官方 CLI 的 `claude doctor` 是两个不同的工具。
 

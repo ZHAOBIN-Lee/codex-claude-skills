@@ -2,6 +2,18 @@
 
 [简体中文](CHANGELOG.md) · [English](CHANGELOG.en.md)
 
+## 未发布 — 本地权限与超时修复
+
+这是对公开提交 567dd9d 的本地修复，不是新的 GitHub 发布，也没有新版本号。
+
+- 新增 `--output PATH`：宿主逐个声明输出文件，Bridge 在推理前做静态的精确 Edit 规则预检，缺少授权时直接拦下；输出文件前后各记一次存在、字节数和哈希。
+- 新增 `--stream-events`：标准流程可选，遇到官方 `permission_denied` 事件立即结束这一批，只保存事件计数，不保存事件文本。
+- 有界读取 stdout/stderr，超时时终止整个进程组，不再因后代进程持有管道而挂住。
+- 新增 `permission_denials_status`（listed/none_reported/unavailable）；没有取到的证据不再当作“没有拒绝”。最终结果带有效会话 ID 时，失败也如实报告，但只有 complete 才保存。
+- 结构化结果被截断时标 `result_complete` 为 false；`--max-turns` 限 1..20，`--timeout` 必须是有限秒数，0<seconds<=3600（0 无效）。
+- 新增[权限与失败处理](skills/claude-bridge/references/08-permissions-and-failures.md)教程，并修正 `dev-orchestrator` 里“失败一律询问用户”的冲突。
+- 验证范围：离线测试，以及在 macOS 上用官方 CLI 2.1.285 的真实订阅小测试。Linux 和 Windows 没有验证。
+
 ## 0.1.0-draft — 2026-10-05
 
 - 将 Claude 调用相关资源整理为自包含 Skill 的公开预览草稿。

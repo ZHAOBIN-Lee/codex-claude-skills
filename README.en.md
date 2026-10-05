@@ -80,7 +80,7 @@ The suggested default is Sonnet at medium effort. That's a preference the Skill 
 | Skill text and tutorials | Shared | Shared | Shared |
 | Bundled Bridge program | Tested in the maintainer's environment | Not validated | Needs adapting (uses POSIX locks and process control) |
 
-The maintainer's Mac runs official CLI 2.1.285. The existing implementation passed 84/84 Bridge tests using a fake CLI and 48/48 dispatcher tests for task lifecycle and deterministic behavior. Neither suite calls a real model. This documentation update did not rerun those tests. There is no stable tag or Release yet.
+The maintainer's Mac runs official CLI 2.1.285. The permissions and timeout repair on 2026-10-06 passed 136/136 Bridge and 48/48 dispatcher offline tests. Real subscription checks also covered an allowed write, a missing-permission block before inference, and an early stop on a runtime denial. There is no stable tag or Release yet.
 
 Still to do: install by an independent friend, Codex install on a fresh machine, real calls on Linux/WSL, native Windows, and GitHub CI. Team, Enterprise, Console API, and third-party providers are not supported.
 
@@ -98,6 +98,7 @@ The tutorials ship inside the Skill, so Codex can read them on demand. You can a
 6. [Troubleshooting](skills/claude-bridge/references/en/05-troubleshooting.md)
 7. [Updates and removal](skills/claude-bridge/references/en/06-update-uninstall.md)
 8. [Limits](skills/claude-bridge/references/en/07-limits.md)
+9. [Writing permissions and failure handling](skills/claude-bridge/references/en/08-permissions-and-failures.md)
 
 The optional workflow has its own [English guide](skills/dev-orchestrator/references/guide.en.md). To look around before installing, the [Skill instructions](skills/claude-bridge/SKILL.md) and the tour are enough.
 

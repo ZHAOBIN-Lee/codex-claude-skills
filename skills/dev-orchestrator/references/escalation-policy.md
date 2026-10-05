@@ -22,8 +22,8 @@ Executor 停止 → BLOCKERS.md 写事实 → transition BLOCKED(blocked_reason)
 | 失败 | 处理 |
 | --- | --- |
 | bridge `doctor` 失败 / 未登录 / API 或非预期认证 / 额外 usage 未确认 | 停。不创建 API Key，不自动开额外用量，不读凭据 |
-| bridge `failed` / `timeout` | 不自动重试（超时后完成状态未知，先看 git status/diff）。报告原因，询问用户 |
-| bridge `needs_permission` | 如实报告被拒操作；只有既有授权覆盖或用户批准才重试 |
+| bridge `failed` / `timeout` / `state_update_failed` | 不静默重试（超时后完成状态未知）。先看 git status/diff 和返回的元数据，弄清实际做了什么，向用户报告。既有授权仍覆盖时，宣布范围后可另行发起新调用，不原样重放已完成的批次，不覆盖已有草稿；授权不足、范围不清，或登录、额度、锁等资源/守卫类失败，才停下问用户。不做自动重试循环 |
+| bridge `needs_permission` / `blocked`（缺精确输出权限） | 如实报告被拒操作或预检结果（`permission_denials_status`：`listed/none_reported/unavailable`）。既有授权覆盖该精确操作时，可只合并精确 allow 条目并保留其余设置，再另行发起新调用；超出既有授权或指令含糊才问用户 |
 | 额度/模型不可用 | 停 strong 阶段，把当前状态写入 Handoff，让用户选择：等待 / 换 Claude 模式 / 明确同意降级 |
 | 结构化结果缺失或格式不符 | 视为未完成，核对实际文件，不凭文字推断 |
 | 验证命令无法运行 | 记录并停止，不当作通过 |

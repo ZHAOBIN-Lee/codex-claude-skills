@@ -77,6 +77,7 @@ Claude 角色不写 `HANDOFF.md`、`STATE.yaml`、`VALIDATION.md`。它们返回
 
 ```text
 claude-bridge run --project DIR --mode <session.strong_mode> --task TEXT
+    --stream-events [--output <项目相对文件>]...
     --effort <route 输出的 value> --effort-source auto|user --effort-reason "<=160 字符单行"
 ```
 
@@ -86,8 +87,8 @@ claude-bridge run --project DIR --mode <session.strong_mode> --task TEXT
 - bridge 只自动注入 `PROJECT_CONTEXT`、`DECISIONS`、`HANDOFF` 和 git 状态/diff。**STATE、Task、ARCHITECTURE 不会自动给到**，必须在 `--task TEXT` 里列出让它先读的**项目内**文件路径。
 - **技能说明由宿主读取后内嵌**：把当前 `roles/*.md` 的内容直接放入 `--task TEXT`；Architect 还要附上 `references/task-schema.md` 与 `templates/TASK.md`，Reviewer 附上需要的 `references/review-policy.md`、任务规范与模板，以便发现问题时创建合法的返工任务。明确说明这些是已内嵌的角色/规范，不要求 Claude 再去读取原技能文件或其引用路径。不要向 Claude 派发项目目录外的技能文件 Read 请求；精确 `Read(...)` 规则并不能代替工作目录授权。
 - 内嵌技能规范，项目材料按路径渐进读取。发送前核对任务文本在 bridge 的 32000 字符上限内；超限时缩减无关上下文，不截断角色约束或任务验收标准。具体装配见 `references/context-loading.md`。
-- Claude 需要写 `.ai/` 下文件（Architect 写计划与任务）时，依赖项目本地 `permissions.allow` 的**精确**授权。返回 `needs_permission` 就如实报告，只有已有授权覆盖或用户批准才重试，不加通配规则。
-- 返回 `failed/timeout/blocked`：不自动重试、不降 API。进入降级流程。
+- Claude 需要写文件（Architect 写 `.ai/` 下的计划与任务）时，你逐个声明 `--output`（不得是 HANDOFF、STATE、VALIDATION、PROGRESS 等保留文件），并在调用前核对项目本地设置里有对应的精确 `Edit(...)` 规则；缺失会在推理前阻止。已有授权覆盖该精确文件时，只合并精确 allow 条目并保留其余设置，不再重复询问；不加通配规则，`Write(path)` 不授权。只读 review 可不带 `--output`。每次一个可检查的成果或一小批任务，你核对实际文件、diff 与测试后再派下一批。细则见 `claude-bridge` Skill 的权限与失败说明。
+- 返回 `needs_permission`：如实报告 `permission_denials`（`listed/none_reported/unavailable`，`unavailable` 不等于没有拒绝）。返回 `failed/timeout/blocked/state_update_failed`：不静默重试、不降 API。先查实际文件与 diff，再按 `references/escalation-policy.md` 处理；既有授权仍覆盖时，宣布范围后可另行发起新调用，不原样重放已完成批次、不覆盖已有草稿。
 
 ### efficient（Executor）
 

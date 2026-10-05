@@ -80,7 +80,7 @@ Claude 回执：实际模型 <本次 actual_models>｜会话 <完整 session_id>
 | Skill 文字和教程 | 可共用 | 可共用 | 可共用 |
 | 附带的 Bridge 程序 | 维护者环境实测过 | 待验证 | 需要适配（用到 POSIX 锁和进程管理） |
 
-维护者的 macOS 环境用官方 CLI 2.1.285。已有实现的离线测试结果是 Bridge 84/84、调度器 48/48：前者使用 fake CLI，后者检查任务生命周期和确定性逻辑，都不调用真实模型。这次只更新文档，没有重跑这些测试。目前没有稳定版 tag 或 Release。
+维护者的 macOS 环境用官方 CLI 2.1.285。2026-10-06 的权限与超时修复通过 Bridge 136/136、调度器 48/48 离线测试，也用真实订阅检查了允许写入、缺权限时调用前拦截、运行时拒绝早停。目前没有稳定版 tag 或 Release。
 
 还没做的验证：朋友独立安装、新机器上的 Codex 安装、Linux/WSL 真实调用、Windows 原生、GitHub CI。Team、Enterprise、Console API 和第三方 Provider 没有适配。
 
@@ -98,6 +98,7 @@ Claude 回执：实际模型 <本次 actual_models>｜会话 <完整 session_id>
 6. [失败排查](skills/claude-bridge/references/05-troubleshooting.md)
 7. [升级与卸载](skills/claude-bridge/references/06-update-uninstall.md)
 8. [已知限制](skills/claude-bridge/references/07-limits.md)
+9. [写文件的权限与失败处理](skills/claude-bridge/references/08-permissions-and-failures.md)
 
 只想先看看再决定装不装，打开 [Skill 说明](skills/claude-bridge/SKILL.md)和上面的导览就够了。
 

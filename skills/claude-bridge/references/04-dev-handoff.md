@@ -47,8 +47,10 @@ Bridge 自己的状态和日志，Claude 不手工重写，你也别手改。GPT
 占位符要换成你本机的实际路径。这不是能直接粘贴执行的命令：
 
 ```text
-python3 <SKILL_DIR>/lib/bridge.py --runtime <RUNTIME_JSON> run --project <PROJECT_DIR> --workflow standard --mode sonnet --task-file .ai/requests/current.txt --effort medium --effort-source user --effort-reason "用户指定开发阶段强度" --timeout 180
+python3 <SKILL_DIR>/lib/bridge.py --runtime <RUNTIME_JSON> run --project <PROJECT_DIR> --workflow standard --stream-events --mode sonnet --task-file .ai/requests/current.txt --output docs/plan.md --effort medium --effort-source user --effort-reason "用户指定开发阶段强度" --max-turns 5 --timeout 600
 ```
+
+`--stream-events` 让 Bridge 在 Claude Code 报出运行时权限拒绝时立刻停下。要写文件，就逐个声明 `--output`（项目相对路径，可重复，不能是 `.ai/` 里的 HANDOFF、STATE 等自有文件），并先在项目本地设置里准备精确的 `Edit(/docs/plan.md)` 规则，缺少时调用在推理前就被拦下。只读审查可以不带 `--output`。`--max-turns` 取 1 到 20，`--timeout` 是不超过 3600 的有限秒数。一次只交一个可检查的成果或一小批任务，核对完再继续。细节见[权限与失败处理](08-permissions-and-failures.md)。
 
 任务文件必须是这个授权项目里的普通 UTF-8 文件，不接受符号链接，也不接受项目外的路径。目录和文件用私有权限，长文本别直接拼进 shell 命令。`--task` 和 `--task-file` 二选一。
 

@@ -47,8 +47,10 @@ A file being in `.gitignore` doesn't make its contents safe. Before you commit a
 Replace the placeholders with your real local paths. This isn't a command to paste and run as written:
 
 ```text
-python3 <SKILL_DIR>/lib/bridge.py --runtime <RUNTIME_JSON> run --project <PROJECT_DIR> --workflow standard --mode sonnet --task-file .ai/requests/current.txt --effort medium --effort-source user --effort-reason "User-selected development effort" --timeout 180
+python3 <SKILL_DIR>/lib/bridge.py --runtime <RUNTIME_JSON> run --project <PROJECT_DIR> --workflow standard --stream-events --mode sonnet --task-file .ai/requests/current.txt --output docs/plan.md --effort medium --effort-source user --effort-reason "User-selected development effort" --max-turns 5 --timeout 600
 ```
+
+`--stream-events` makes the Bridge stop right away when Claude Code reports a runtime permission denial. To write files, declare each one with `--output` (a project-relative path, repeatable, and never one of the Bridge's own files in `.ai/` such as HANDOFF or STATE), and first prepare the exact `Edit(/docs/plan.md)` rule in the project's local settings. Without it the call is stopped before inference. A read-only review can leave out `--output`. `--max-turns` is 1 to 20, and `--timeout` is a finite number of seconds up to 3600. Hand over one checkable deliverable or one small batch at a time, and check it before moving on. Details are in [permissions and failures](08-permissions-and-failures.md).
 
 The task file must be a regular UTF-8 file inside the authorized project. Symlinks and paths outside the project are rejected. Use private permissions for the directory and file, and don't paste long text straight into a shell command. Use either `--task` or `--task-file`.
 
