@@ -1,0 +1,43 @@
+{
+  "package_version": "0.1.0-draft",
+  "release_status": "public_preview_draft",
+  "state_schema_version": 1,
+  "python_minimum_declared": "3.9",
+  "baseline_official_cli_versions": [
+    "2.1.285"
+  ],
+  "local_offline_verified_platforms": [
+    "macOS"
+  ],
+  "fresh_desktop_install_verified": false,
+  "runtime_configuration": "external_user_owned_explicit_runtime_argument",
+  "windows_native_adapter_complete": false,
+  "required_resources": [
+    "SKILL.md",
+    "lib/bridge.py",
+    "templates/runtime.example.json",
+    "templates/preferences.example.json",
+    "references/00-tour.md",
+    "references/01-setup.md",
+    "references/02-conversation.md",
+    "references/03-models-effort-receipt.md",
+    "references/04-dev-handoff.md",
+    "references/05-troubleshooting.md",
+    "references/06-update-uninstall.md",
+    "references/07-limits.md",
+    "LICENSE",
+    "references/en/00-tour.md",
+    "references/en/01-setup.md",
+    "references/en/02-conversation.md",
+    "references/en/03-models-effort-receipt.md",
+    "references/en/04-dev-handoff.md",
+    "references/en/05-troubleshooting.md",
+    "references/en/06-update-uninstall.md",
+    "references/en/07-limits.md"
+  ],
+  "license": "MIT",
+  "documentation_languages": [
+    "zh-CN",
+    "en"
+  ]
+}

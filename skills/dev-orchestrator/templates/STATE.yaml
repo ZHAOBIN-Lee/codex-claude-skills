@@ -1,0 +1,18 @@
+workflow_version: 1
+project_status: active
+current_phase: UNINITIALIZED
+current_milestone: null
+current_task: null
+last_role: null
+next_role: architect
+needs_user: false
+blocked_reason: null
+session:
+  strong_mode: null
+counters:
+  rework_cycles: 0
+  executor_retries: 0
+  resolve_attempts: 0
+  tasks_this_run: 0
+  tasks_since_checkpoint: 0
+updated_at: "{{UPDATED_AT}}"

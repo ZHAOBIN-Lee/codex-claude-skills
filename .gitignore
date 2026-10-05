@@ -1,0 +1,17 @@
+__pycache__/
+*.py[cod]
+.DS_Store
+.venv/
+.pytest_cache/
+.env
+.env.*
+!.env.example
+**/.ai/
+**/.claude/
+**/runtime.json
+**/installation.json
+**/preferences.local.json
+**/settings.local.json
+**/backups/
+**/requests/
+*.log

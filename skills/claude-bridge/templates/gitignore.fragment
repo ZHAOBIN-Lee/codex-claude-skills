@@ -1,0 +1,7 @@
+# Claude Bridge local session metadata and run metadata
+.ai/sessions.json
+.ai/consult.json
+.ai/requests/
+.ai/logs/
+.ai/backups/
+.ai/bridge.lock
