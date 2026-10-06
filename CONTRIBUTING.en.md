@@ -11,11 +11,10 @@ If a change brings in new external source or documentation, include its author, 
 From the repository root:
 
 ```text
-python3 -m unittest discover -s skills/claude-bridge/tests -p 'test_*.py'
 python3 -m unittest discover -s skills/dev-orchestrator/tests -p 'test_*.py'
 ```
 
-The Bridge tests use a fake CLI; the dispatcher tests check task lifecycle and deterministic behavior. Neither suite calls a real model or needs a subscription. Real-model tests are up to the person running them on their own machine; keep personal subscription accounts and login credentials out of CI.
+The dispatcher tests check task lifecycle, dispatch decisions and deterministic behavior. They call no real model and need no subscription. Real-model tests are up to the person running them on their own machine; keep personal subscription accounts and login credentials out of CI.
 
 ## Before you submit
 

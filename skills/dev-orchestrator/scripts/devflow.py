@@ -29,11 +29,24 @@ except Exception:  # pragma: no cover
 SKILL_ROOT = Path(__file__).resolve().parent.parent
 TEMPLATE_DIR = SKILL_ROOT / "templates"
 
-# Files created by this skill. PROJECT_CONTEXT/DECISIONS/HANDOFF belong to claude-bridge
-# (its `init` is idempotent) and are deliberately not created here.
+# Files created by this skill. Existing files are never overwritten.
 OWN_FILES = ("STATE.yaml", "config.yaml", "MASTER_PLAN.md", "ARCHITECTURE.md",
              "PROGRESS.md", "BLOCKERS.md", "VALIDATION.md")
-BRIDGE_FILES = ("PROJECT_CONTEXT.md", "DECISIONS.md", "HANDOFF.md")
+# Shared context files. Earlier versions left these to claude-bridge; init now creates a minimal header.
+CONTEXT_FILES = {
+    "PROJECT_CONTEXT.md": "# Project Context\n\nStable facts every role needs: purpose, stack, commands, conventions.\n",
+    "DECISIONS.md": "# Decisions\n\nArchitecture decision records. Append with the skill's templates/DECISIONS.md snippet.\n",
+    "HANDOFF.md": "# Handoff\n\nThe Orchestrator appends one record per role using the skill's templates/HANDOFF.md.\n",
+}
+# How a run is carried out; the user picks one at the start of a run.
+#   claude_dispatch_gpt: Claude chat plans and reviews, GPT sub-agents write code.
+#   switch_to_gpt:       Claude chat plans, the user switches to GPT to code, GPT spawns a Claude reviewer.
+#   claude_only:         Claude plans and codes; a fresh-context Claude sub-agent reviews.
+EXEC_MODES = ("claude_dispatch_gpt", "switch_to_gpt", "claude_only")
+STRONG_MODELS = ("opus", "sonnet")
+# A Claude agent role name (for example claude_sdk_claude_fable_5_1) is also accepted, so the
+# Claude model the current chat already uses can be recorded as is.
+AGENT_ROLE = re.compile(r"^claude_[a-z0-9_]{1,60}$")
 
 PHASES = ("UNINITIALIZED", "PLANNING", "READY_TO_EXECUTE", "EXECUTING", "VALIDATING",
           "READY_FOR_REVIEW", "REVIEWING", "REWORK_REQUIRED", "BLOCKED", "DONE")
@@ -62,8 +75,8 @@ TASK_STATUS = {
 }
 DEFAULTS = {
     "routing": {"architect": "strong", "executor": "efficient", "reviewer": "strong"},
-    "tiers": {"strong": {"via": "claude-bridge", "bridge_mode": "ask"},
-              "efficient": {"via": "native"}},
+    "tiers": {"strong": {"via": "claude_native", "model": "ask"},
+              "efficient": {"via": "gpt_native"}},
     "automation": {"enabled": True, "auto_continue_low_risk": True, "max_tasks_per_run": 5,
                    "max_executor_retries": 2, "max_rework_cycles": 3,
                    "max_resolve_attempts": 1, "stop_on_high_risk_change": True},
@@ -377,8 +390,59 @@ def _section(body, name):
     return m.group(1) if m else ""
 
 
-def route(project, role, task_id=None, force=None):
-    """Return the tier decision. Only tier names; the model is resolved by the existing router."""
+def executor_tier(cfg, meta, body):
+    """Executor upgrade rules; upgrades only."""
+    risk = str(meta.get("risk", "medium")).lower()
+    complexity = int(meta.get("complexity") or 5)
+    hits = sensitive_domains(meta, body, cfg["risk"]["force_strong_for"])
+    if risk == "high":
+        return "strong", ["risk=high"]
+    if complexity >= 8:
+        return "strong", ["complexity=%d>=8" % complexity]
+    if hits:
+        return "strong", ["sensitive domain: " + ", ".join(hits)]
+    if str(meta.get("executor_tier", "")).lower() == "strong":
+        return "strong", ["Architect set executor_tier=strong"]
+    return cfg["routing"]["executor"], ["complexity=%d, risk=%s, no sensitive domain" % (complexity, risk)]
+
+
+def dispatch_for(role, tier, session, executed_by=None):
+    """Where a step runs. current_chat = the Orchestrator's own chat; host = model that chat must be on."""
+    mode, model = session.get("execution_mode"), session.get("strong_mode")
+    if mode not in EXEC_MODES:
+        return {"via": "ask_execution_mode", "host": None, "mode": None}
+    if model in STRONG_MODELS:
+        agent = "claude_" + model
+    elif model and AGENT_ROLE.match(str(model)):
+        agent = str(model)
+    else:
+        agent = "ask"
+    if role == "architect":
+        out = {"via": "current_chat", "host": "claude"}
+    elif role == "executor":
+        if mode == "claude_only" or (mode == "claude_dispatch_gpt" and tier == "strong"):
+            out = {"via": "current_chat", "host": "claude"}
+        elif mode == "claude_dispatch_gpt":
+            out = {"via": "gpt_subagent", "host": "claude"}
+        elif tier == "strong":
+            out = {"via": "claude_subagent", "host": "gpt", "agent_type": agent}
+        else:
+            out = {"via": "current_chat", "host": "gpt"}
+    else:
+        host = "gpt" if mode == "switch_to_gpt" else "claude"
+        if executed_by == "claude":
+            # Claude wrote the code: review in a fresh Claude context, and report it as same-family review.
+            out = {"via": "claude_subagent", "host": host, "agent_type": agent, "review": "same_model_family_fresh_context"}
+        elif host == "claude":
+            out = {"via": "current_chat", "host": "claude", "review": "independent_model"}
+        else:
+            out = {"via": "claude_subagent", "host": "gpt", "agent_type": agent, "review": "independent_model"}
+    out["mode"] = mode
+    return out
+
+
+def route(project, role, task_id=None, force=None, executed_by=None):
+    """Return the tier decision and where it runs. Only tier names and Codex agent roles, no model names."""
     cfg = load_config(project)
     if role not in ("architect", "executor", "reviewer"):
         raise DevflowError("unknown_role: " + role)
@@ -388,27 +452,19 @@ def route(project, role, task_id=None, force=None):
     if force in ("strong", "efficient"):
         tier, reasons = force, ["user override"]
     elif role == "executor" and task_id:
-        risk = str(meta.get("risk", "medium")).lower()
-        complexity = int(meta.get("complexity") or 5)
-        hits = sensitive_domains(meta, body, cfg["risk"]["force_strong_for"])
-        if risk == "high":
-            tier, reasons = "strong", ["risk=high"]
-        elif complexity >= 8:
-            tier, reasons = "strong", ["complexity=%d>=8" % complexity]
-        elif hits:
-            tier, reasons = "strong", ["sensitive domain: " + ", ".join(hits)]
-        elif str(meta.get("executor_tier", "")).lower() == "strong":
-            tier, reasons = "strong", ["Architect set executor_tier=strong"]
-        else:
-            reasons = ["complexity=%d, risk=%s, no sensitive domain" % (complexity, risk)]
+        tier, reasons = executor_tier(cfg, meta, body)
+    session = load_state(project).get("session") or {}
+    if role == "reviewer" and executed_by not in ("claude", "gpt"):
+        ran = executor_tier(cfg, meta, body)[0] if task_id else cfg["routing"]["executor"]
+        executed_by = "claude" if session.get("execution_mode") == "claude_only" or ran == "strong" else "gpt"
     result = {"role": role, "tier": tier, "reasons": reasons, "task": task_id,
-              "dispatch": cfg["tiers"].get(tier, {"via": "unknown"})}
+              "dispatch": dispatch_for(role, tier, session, executed_by)}
     result["effort"] = suggest_effort(role, meta, tier, reasons)
     return result
 
 
 def suggest_effort(role, meta, tier, reasons):
-    """Bridge effort request for strong tier. Auto choice is only medium|high (bridge rule)."""
+    """Advisory effort for strong-tier steps (medium|high). Claude agent roles fix their own effort."""
     if tier != "strong":
         return None
     risk = str(meta.get("risk", "")).lower()
@@ -502,15 +558,22 @@ def transition(project, to_phase, task=None, reason="", user_override=False):
             "counters": c, "notes": notes}
 
 
-def begin_run(project, strong_mode=None):
+def begin_run(project, strong_mode=None, execution_mode=None):
     state = load_state(project)
     state["counters"]["tasks_this_run"] = 0
+    session = state.get("session") or {}
+    state["session"] = session
     if strong_mode:
-        if strong_mode not in ("opus", "sonnet", "default"):
-            raise DevflowError("strong_mode_must_be_opus_sonnet_or_default")
-        state.setdefault("session", {})["strong_mode"] = strong_mode
+        if strong_mode not in STRONG_MODELS and not AGENT_ROLE.match(strong_mode):
+            raise DevflowError("strong_mode_must_be_opus_sonnet_or_a_claude_agent_role")
+        session["strong_mode"] = strong_mode
+    if execution_mode:
+        if execution_mode not in EXEC_MODES:
+            raise DevflowError("execution_mode_must_be_one_of: " + ", ".join(EXEC_MODES))
+        session["execution_mode"] = execution_mode
     save_state(project, state)
-    return {"tasks_this_run": 0, "strong_mode": (state.get("session") or {}).get("strong_mode")}
+    return {"tasks_this_run": 0, "strong_mode": session.get("strong_mode"),
+            "execution_mode": session.get("execution_mode")}
 
 
 def next_action(project):
@@ -519,6 +582,7 @@ def next_action(project):
     role = PHASE_ROLE[phase]
     result = {"phase": phase, "role": role, "task": state.get("current_task"),
               "needs_user": bool(state.get("needs_user")), "automation_enabled": bool(cfg["automation"]["enabled"])}
+    result["execution_mode"] = (state.get("session") or {}).get("execution_mode")
     if phase == "BLOCKED":
         result["role"] = None if state.get("needs_user") else "architect"
         result["action"] = "report blocker to user" if state.get("needs_user") else "strong-model root-cause analysis"
@@ -541,15 +605,19 @@ def init(project, dry_run=False):
             if name == "STATE.yaml":
                 text = text.replace("{{UPDATED_AT}}", now())
             atomic_write(target, text)
+    for name, text in CONTEXT_FILES.items():
+        if (ai / name).exists():
+            skipped.append(name)
+            continue
+        created.append(name)
+        if not dry_run:
+            atomic_write(ai / name, text)
     if not (ai / "tasks").exists():
         created.append("tasks/")
         if not dry_run:
             (ai / "tasks").mkdir(parents=True, exist_ok=True)
-    missing_bridge = [n for n in BRIDGE_FILES if not (ai / n).exists()]
     return {"project": str(ai.parent), "created": created, "skipped_existing": skipped,
-            "bridge_owned_missing": missing_bridge, "dry_run": dry_run,
-            "next": ("run `claude-bridge init --project DIR` (needs user authorization to add files) "
-                     "before any strong-tier call") if missing_bridge else "ready"}
+            "dry_run": dry_run, "next": "ready"}
 
 
 def status(project):
@@ -581,11 +649,13 @@ def main(argv=None):
         if name == "init":
             s.add_argument("--dry-run", action="store_true")
         if name == "begin-run":
-            s.add_argument("--strong-mode", choices=("opus", "sonnet", "default"))
+            s.add_argument("--strong-mode", help="opus | sonnet | a claude_* agent role (the current chat's Claude)")
+            s.add_argument("--execution-mode", choices=EXEC_MODES)
         if name == "route":
             s.add_argument("--role", required=True, choices=("architect", "executor", "reviewer"))
             s.add_argument("--task")
             s.add_argument("--force", choices=("strong", "efficient"))
+            s.add_argument("--executed-by", choices=("claude", "gpt"))
         if name == "transition":
             s.add_argument("--to", required=True)
             s.add_argument("--task")
@@ -600,9 +670,9 @@ def main(argv=None):
         elif a.cmd == "next":
             out = next_action(a.project)
         elif a.cmd == "begin-run":
-            out = begin_run(a.project, a.strong_mode)
+            out = begin_run(a.project, a.strong_mode, a.execution_mode)
         elif a.cmd == "route":
-            out = route(a.project, a.role, a.task, a.force)
+            out = route(a.project, a.role, a.task, a.force, a.executed_by)
         else:
             out = transition(a.project, a.to, a.task, a.reason, a.user_override)
     except DevflowError as e:

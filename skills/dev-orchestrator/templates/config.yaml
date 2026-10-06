@@ -1,6 +1,7 @@
 # Project-level overrides. Anything omitted falls back to the skill defaults.
-# Tier names only. Never write model names here: the strong tier is resolved by the
-# existing claude-bridge mode (confirmed in chat), the efficient tier is the host's current model.
+# Tier names only. Never write model names here: the strong tier is native Claude in Codex
+# (Opus or Sonnet, confirmed in chat), the efficient tier is native GPT in Codex.
+# How a run is carried out (execution mode) is chosen in chat at the start of each run.
 workflow_version: 1
 
 routing:
@@ -10,10 +11,10 @@ routing:
 
 tiers:
   strong:
-    via: claude-bridge
-    bridge_mode: ask        # ask | opus | sonnet | default  (ask = confirm in chat at the start of each run)
+    via: claude_native
+    model: ask              # ask | opus | sonnet  (ask = confirm in chat at the start of each run)
   efficient:
-    via: native             # whatever model the current host chat is already using
+    via: gpt_native         # the GPT model in the Codex model picker
 
 automation:
   enabled: true

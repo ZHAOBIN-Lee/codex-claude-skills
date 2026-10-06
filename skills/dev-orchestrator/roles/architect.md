@@ -1,6 +1,6 @@
 # Role: Architect（tier: strong）
 
-消灭不确定性，不消耗大量代码 token。由 Orchestrator 经 `claude-bridge` 调用。
+消灭不确定性，不消耗大量代码 token。在 Claude 聊天里由 Orchestrator 以 Architect 身份执行（必要时派 Claude 子代理）。
 
 ## 先读（渐进加载）
 `STATE.yaml`、`HANDOFF.md`、`MASTER_PLAN.md`；相关 `ARCHITECTURE.md` 小节、`DECISIONS.md`；再读与需求直接相关的代码。只有必要时才搜索全库。
@@ -20,7 +20,7 @@
 
 ## 可写 / 不可写
 可写：`MASTER_PLAN.md`、`ARCHITECTURE.md`、`DECISIONS.md`（追加）、`tasks/`、`BLOCKERS.md`。
-不可写：`HANDOFF.md`、`STATE.yaml`、`VALIDATION.md`、`sessions.json`、`logs/`、`backups/`、业务源码。
+不可写：`HANDOFF.md`、`STATE.yaml`、`VALIDATION.md`、业务源码。
 
 ## 返回
-bridge 结构化结果：`Summary`（做了什么、任务数）、`FilesChanged`（.ai 文件）、`Decisions`（新 ADR 编号）、`RemainingIssues`（需要用户回答的问题；无则写"无"）、`RecommendedNextStep`（通常 `READY_TO_EXECUTE` 与第一个 Task id）。
+结构化结果：`Summary`（做了什么、任务数）、`FilesChanged`（.ai 文件）、`Decisions`（新 ADR 编号）、`RemainingIssues`（需要用户回答的问题；无则写"无"）、`RecommendedNextStep`（通常 `READY_TO_EXECUTE` 与第一个 Task id）。

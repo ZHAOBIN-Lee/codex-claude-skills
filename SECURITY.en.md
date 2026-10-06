@@ -11,7 +11,7 @@ The repository doesn't collect OAuth tokens, cookies, API keys, passwords, or of
 Include:
 
 - the Skill version and your OS
-- the Python and official CLI versions
+- the Python, Codex, and codex-claude-models-plugin versions
 - what kind of operation you were doing
 - the error code, plus the minimum redacted detail needed to reproduce it
 
@@ -23,4 +23,4 @@ The repository is public and there's no dedicated private-reporting channel yet.
 
 ## A rule for porting
 
-Normal permissions, explicit project scope, official-subscription authentication, and provider checks are part of how the Bridge works today. When you port or adapt it, don't skip them to get something that merely runs.
+Normal permissions, explicit project scope, model routing, and sub-agent permissions are part of how the workflow works today. When you port or adapt it, don't skip them to get something running, and don't quietly swap models.

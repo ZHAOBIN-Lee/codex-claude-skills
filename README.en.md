@@ -2,112 +2,81 @@
 
 [简体中文](README.md) · [English](README.en.md)
 
-You're working in Codex and want Claude's opinion on a design, a diff, or a bug that won't die. The usual routine is to copy the material into Claude's app, wait, and paste the answer back. After a few rounds the context is scattered across two windows.
+Claude writes the plan, GPT writes the code, Claude checks it. `dev-orchestrator` splits a development task into steps for different models, keeps state in the project's `.ai/` directory, and runs the validation commands itself instead of trusting a model's "tests pass".
 
-The `claude-bridge` Skill skips the copying. Ask in Codex, and Codex hands the question to Claude through the official Claude Code CLI already signed in on your machine, then brings the answer back to the same chat. Follow-ups work the same way. Every call comes with a short receipt: which model actually answered, the session ID, and whether the call succeeded. You don't have to take "I'm Sonnet" from the model's own mouth; you can check.
-
-Codex itself stays on native GPT. Claude is only called when you ask for it.
+It uses only Codex's native models and sub-agents, so Claude and GPT need to be in the same Codex model picker. [codex-claude-models-plugin](https://github.com/ZHAOBIN-Lee/codex-claude-models-plugin) does that; install it first.
 
 This is a community project, not affiliated with Anthropic or OpenAI, under the [MIT License](LICENSE).
 
-> **0.1.0-draft public preview; no stable release yet.** Tested on the maintainer's Mac. See [Platforms and validation](#platforms-and-validation) for other environments.
+> **0.2.0 public preview.** Used only on the maintainer's macOS so far. The old `claude-bridge` (relaying through the Claude Code CLI) is no longer maintained; its last version is kept at the [`legacy-claude-bridge`](https://github.com/ZHAOBIN-Lee/codex-claude-skills/tree/legacy-claude-bridge) tag.
 
 ## Quick start
 
 You need:
 
-- Codex with Skill support.
-- The official Claude Code CLI on your machine, signed in with your own claude.ai Pro or Max subscription. See the [official setup guide](https://code.claude.com/docs/en/setup).
+- [codex-claude-models-plugin](https://github.com/ZHAOBIN-Lee/codex-claude-models-plugin) installed, with GPT and Claude both in the model picker.
+- Codex multi-agent enabled (`multi_agent = true` under `[features]` in `config.toml`), and Claude sub-agent roles such as `claude_opus` and `claude_sonnet` (the provider's install creates them).
 - Python 3.9 or newer.
 
-Send this to Codex to install the whole `skills/claude-bridge/` directory:
+Install it by sending this in Codex:
 
 ```text
-$skill-installer Install skills/claude-bridge from https://github.com/ZHAOBIN-Lee/codex-claude-skills using the main branch preview. If a Skill with that name is installed, compare and back it up first.
+$skill-installer Install skills/dev-orchestrator from https://github.com/ZHAOBIN-Lee/codex-claude-skills. If a Skill with the same name exists, compare and back it up first.
 ```
 
-If the installer says Codex needs a restart to see the new Skill, do that. Then ask how it works before making any real call:
+Then ask how it works. This doesn't start any development:
 
 ```text
-$claude-bridge How do I use this Skill? Give me the beginner's guide in English.
-$claude-bridge Check what I need for first-time setup. Do not call Claude yet.
+$dev-orchestrator How does this workflow work? Do not start yet.
 ```
-
-Both only read the local tutorials. Neither calls Claude.
-
-First-time setup means writing a runtime file for your own official CLI (CLI path, version, SHA-256; see [runtime.example.json](skills/claude-bridge/templates/runtime.example.json) for the format). Keep it outside the Skill directory and pass it with `--runtime`. You also check your own account, confirm that extra usage credits are off, and record that. The example file starts as "unconfirmed", and real calls stay blocked until you confirm. Both steps are per user; don't copy the author's. The details are in [first-time setup](skills/claude-bridge/references/en/01-setup.md), and Codex can walk you through it. Default preferences live in [preferences.example.json](skills/claude-bridge/templates/preferences.example.json).
 
 ## One real request
 
-Once setup is done, ask in your project:
+Pick Claude in the model picker, then say:
 
 ```text
-In this project, use Claude Sonnet at medium effort to find holes in docs/plan.md. Discussion only; don't edit files.
+In /path/to/project, use the development workflow to add a CSV export. Keep my existing uncommitted changes.
 ```
 
-Codex states the model and effort first, sends Claude the material it needs, and brings back the advice with a receipt at the end:
+The strong model is the Claude model the current chat uses; you aren't asked again. Before it starts, it asks one thing: the execution mode.
 
-```text
-Claude receipt: actual model <this call's actual_models> | session <full session_id> | status <status> | evidence <this call's log link>
-```
-
-The angle brackets are placeholders. Each call fills them from its own result.
-
-To keep the discussion going, say so once:
-
-```text
-From now on, keep using Claude Sonnet at medium effort for this plan until I say switch back to Codex.
-```
-
-After that, "continue and expand the second point" in the same chat is enough. "Switch back to Codex" stops it. A different project or a new chat needs a fresh instruction.
-
-## What it does
-
-| Goal | You can say | What runs |
-| --- | --- | --- |
-| Ask one question | "Ask Claude Sonnet to look at this problem" | `consult`: analyzes only the material you supply, with built-in tools and MCP off for that call |
-| Keep a discussion going | "For this project, use Claude until I say switch back to Codex" | Requests the project's previous session; `consult` sends only changes when resuming succeeds and the baseline remains valid |
-| Check the model | "Include the actual model and call evidence" | Included by default on every call |
-| Edit files or review a diff | "Have Claude review this project's diff" | `standard`: normal permissions, and Codex checks the result independently |
-| Development workflow (optional) | Install `dev-orchestrator` | Experimental: Claude plans and reviews, native GPT executes, scripted checks move the state forward |
-
-The suggested default is Sonnet at medium effort. That's a preference the Skill follows. Name another model or effort and yours wins.
-
-## Platforms and validation
-
-| | macOS | Linux / WSL | Native Windows |
+| Mode | Plan | Code | Check |
 | --- | --- | --- | --- |
-| Skill text and tutorials | Shared | Shared | Shared |
-| Bundled Bridge program | Tested in the maintainer's environment | Not validated | Needs adapting (uses POSIX locks and process control) |
+| Claude dispatches GPT sub-agents | the Claude chat | GPT sub-agents | Claude validates and reviews itself, writes rework tasks, and sends GPT back |
+| Switch to GPT | Claude | you switch the chat to GPT, which codes | GPT spawns a read-only Claude sub-agent to review |
+| Claude does everything | Claude | Claude | a fresh-context Claude sub-agent, reported as same-model-family review |
 
-The maintainer's Mac runs official CLI 2.1.285. The permissions and timeout repair on 2026-10-06 passed 136/136 Bridge and 48/48 dispatcher offline tests. Real subscription checks also covered an allowed write, a missing-permission block before inference, and an early stop on a runtime denial. There is no stable tag or Release yet.
+The first mode suits continuous work: Claude keeps checking and GPT keeps working, with no model switching. Planning only happens in a Claude chat; if the current chat's model doesn't match the next step, the workflow stops and asks you to switch.
 
-Still to do: install by an independent friend, Codex install on a fresh machine, real calls on Linux/WSL, native Windows, and GitHub CI. Team, Enterprise, Console API, and third-party providers are not supported.
+To pick up later, say "continue the development workflow". For progress only, say `/dev status`; that calls no model.
 
-For the itemized lists, see [local verification](docs/en/LOCAL_VERIFICATION.md) and the [compatibility plan](docs/en/COMPATIBILITY.md).
+## Common requests
 
-## Tutorials
+| Request | What it does |
+| --- | --- |
+| `Use the development workflow to implement <goal>` / `/dev new` | New goal: plan, split into tasks, then advance to a stopping point |
+| `Continue the development workflow` / `/dev continue` | One next step |
+| `/dev run` | Advance continuously within the limits |
+| `/dev status` | Read-only progress, no model call |
+| `/dev plan` | Plan only, no execution |
+| `/dev review` | Review the current task or diff directly |
+| `/dev resolve` | When a task is blocked, let Claude find the root cause |
 
-The tutorials ship inside the Skill, so Codex can read them on demand. You can also ask it to explain in English or Chinese. The Chinese versions are one directory up in [references/](skills/claude-bridge/references/00-tour.md).
+## When it stops
 
-1. [Five-minute tour](skills/claude-bridge/references/en/00-tour.md)
-2. [First-time setup](skills/claude-bridge/references/en/01-setup.md)
-3. [Continued conversations and switching back](skills/claude-bridge/references/en/02-conversation.md)
-4. [Models, effort, and receipts](skills/claude-bridge/references/en/03-models-effort-receipt.md)
-5. [Development handoffs](skills/claude-bridge/references/en/04-dev-handoff.md)
-6. [Troubleshooting](skills/claude-bridge/references/en/05-troubleshooting.md)
-7. [Updates and removal](skills/claude-bridge/references/en/06-update-uninstall.md)
-8. [Limits](skills/claude-bridge/references/en/07-limits.md)
-9. [Writing permissions and failure handling](skills/claude-bridge/references/en/08-permissions-and-failures.md)
+A missing business decision, a scope that contradicts the repo, workspace conflicts it can't handle, an unavailable model or sub-agent, the wrong model in the current chat, validation that can't run, task or rework limits reached, or you saying stop. High-risk or irreversible operations are judged against what you actually authorized. It never bypasses a permission check to keep going, and never quietly substitutes GPT for a Claude step.
 
-The optional workflow has its own [English guide](skills/dev-orchestrator/references/guide.en.md). To look around before installing, the [Skill instructions](skills/claude-bridge/SKILL.md) and the tour are enough.
+## Validation status
 
-## Other docs
+- 54 offline tests for `devflow.py` pass (`python3 -m unittest discover -s skills/dev-orchestrator/tests`).
+- Sub-agents were tested live: a Claude chat spawned a GPT sub-agent, and a GPT chat spawned a Claude sub-agent; each ran one command, and the actual model matched the request.
+- Not yet verified on an independent user's machine, on Linux or Windows, or as a full multi-task run in a real project after this rewrite.
 
-- [Compatibility plan](docs/en/COMPATIBILITY.md): what each platform still needs
-- [Local verification](docs/en/LOCAL_VERIFICATION.md)
-- [Preview and release checklist](docs/en/RELEASE_CHECKLIST.md)
-- [License](LICENSING.en.md), [provenance](docs/en/PROVENANCE.md), [third-party notices](THIRD_PARTY_NOTICES.en.md)
-- [Contributing](CONTRIBUTING.en.md), [privacy and issue reporting](SECURITY.en.md), [changelog](CHANGELOG.en.md)
+Details: [local verification record](docs/en/LOCAL_VERIFICATION.md).
 
-The repository contains source, offline tests, generic templates, and tutorials. You provide Claude Code and your own account; personal configuration and runtime state stay on your machine.
+## Docs
+
+- [Skill instructions](skills/dev-orchestrator/SKILL.md) (Chinese, binding rules) and the [English guide](skills/dev-orchestrator/references/guide.en.md)
+- [Compatibility](docs/en/COMPATIBILITY.md), [local verification](docs/en/LOCAL_VERIFICATION.md), [release checklist](docs/en/RELEASE_CHECKLIST.md)
+- [Licensing](LICENSING.en.md), [provenance](docs/en/PROVENANCE.md), [third-party notices](THIRD_PARTY_NOTICES.en.md)
+- [Contributing](CONTRIBUTING.en.md), [privacy and reporting](SECURITY.en.md), [changelog](CHANGELOG.en.md)

@@ -8,4 +8,4 @@
 
 仓库公开可见和代码的使用许可是两回事，后者靠许可文件说明。参见 [GitHub 许可说明](https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/licensing-a-repository)。
 
-本项目调用你本机的官方 Claude Code CLI，不分发官方客户端。账号和订阅由你自行管理，外部产品适用各自的条款。外部产品见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)；代码来源见 [docs/PROVENANCE.md](docs/PROVENANCE.md)。
+本项目通过 Codex 原生模型和子代理工作，Claude 由另行安装的 [codex-claude-models-plugin](https://github.com/ZHAOBIN-Lee/codex-claude-models-plugin) 接入（它有自己的 MIT 许可和上游署名），本仓库不包含它的代码，也不分发任何官方客户端。账号和订阅由你自行管理，外部产品适用各自的条款。外部产品见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)；代码来源见 [docs/PROVENANCE.md](docs/PROVENANCE.md)。

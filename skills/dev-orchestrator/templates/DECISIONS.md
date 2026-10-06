@@ -1,4 +1,4 @@
-<!-- Snippet to APPEND to the existing .ai/DECISIONS.md (owned by claude-bridge). Do not replace that file. -->
+<!-- Snippet to APPEND to the existing .ai/DECISIONS.md. Do not replace that file. -->
 ## YYYY-MM-DD HH:mm Australia/Melbourne — ADR-NNN: Decision title
 
 - Status: Proposed | Accepted | Superseded by ADR-NNN

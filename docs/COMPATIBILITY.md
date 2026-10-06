@@ -1,37 +1,21 @@
-# 平台兼容与适配计划
+# 平台兼容
 
 [简体中文](COMPATIBILITY.md) · [English](en/COMPATIBILITY.md)
 
-想法很简单：Skill 说明、偏好约定和教程在各平台共用，只有负责调用的那一层按系统适配。文字可以直接共用；随 Skill 带的脚本在哪个系统上能不能跑，要分别验证。
+`dev-orchestrator` 分两层：Skill 说明和角色规范是纯文字，各平台都能用；`scripts/devflow.py` 只用 Python 标准库，自带 YAML 子集解析，运行时不需要 PyYAML，最低 Python 3.9。模型调用全部交给 Codex 原生模型和子代理，所以能不能用，主要取决于 [codex-claude-models-plugin](https://github.com/ZHAOBIN-Lee/codex-claude-models-plugin) 在你的系统上能不能跑。
 
-## 现在的状态
-
-Bridge 用 Python 标准库、`fcntl` 文件锁、POSIX 进程组和文件权限，还会读 macOS 的管理配置路径。开发调度器自带一个 YAML 子集解析，运行时不需要 PyYAML。最低 Python 版本写的是 3.9；各个版本是否都能跑，要按下面的矩阵重测。
-
-目前真实用过的官方 CLI 是 2.1.285，在维护者的 macOS 上。CLI 的路径、版本、架构和 SHA-256 要在每个使用者自己的机器上绑定：
-
-- 不要抄作者那台 ARM 机器的哈希。
-- 随便对 PATH 里的某个程序算个哈希，也证明不了它来自官方，来源要另外有证据。
-
-## 各平台还要做什么
-
-| 能力 | macOS／Linux | Windows 原生 | 做到什么算过 |
+| | macOS | Linux / WSL | Windows 原生 |
 | --- | --- | --- | --- |
-| 找到 Python 和 CLI | 从显式安装路径调用，不写死作者目录 | 支持本机 Python 和官方 CLI 的绝对路径 | 路径含空格、Unicode、软链接都能处理，来源有证据 |
-| 同一项目只跑一个调用 | POSIX 锁 | 换成 Windows 的锁 | 并发调用被拒绝，崩溃后锁能释放 |
-| 超时与清理子进程 | POSIX 进程组 | 换成 Windows 进程树处理 | 不留孤儿进程，结果未知时不重试 |
-| 私有配置与权限 | Unix 权限，不跟随符号链接 | 处理 ACL 和重解析点 | 移植后保护不能变弱 |
-| 管理设置检查 | 各平台对应的路径 | 官方 Windows 路径 | Provider、认证、强度设置都能覆盖 |
-| 时间与路径 | 明确时区，按平台解析路径 | 时区数据库和原生路径 | 不假设朋友和作者在同一时区 |
+| Skill 说明和角色规范 | 可用 | 可用 | 可用 |
+| `devflow.py` 离线测试 | 维护者实测通过 | 待验证 | 待验证 |
+| 原生 Provider（Claude 进模型菜单） | 维护者日常使用 | 未测试 | 未测试 |
+| Codex 子代理派发 | 维护者实测 | 取决于 Provider | 取决于 Provider |
 
-这张表是待办清单，不是已经支持的清单。现在的 POSIX 脚本不能直接当 Windows 原生可用。在 WSL 里跑，也要单独验证路径、项目范围和宿主调用方式；WSL 能跑，不说明 Windows 原生能跑。
+这张表是现状，不是承诺。离线测试通过只说明调度逻辑在该平台上能跑；真实模型和子代理要在装好 Provider 的机器上另外验证。
 
-## 验证矩阵
+## 验证步骤
 
-1. 每个平台上跑离线用例：失败、锁、路径、权限、超时、状态保存。
-2. 对每个要支持的官方 CLI 版本，检查参数、订阅认证、实际返回的模型和会话恢复。
-3. 从全新 checkout 只装 Skill 目录，确认程序、模板、许可和教程齐全。
-4. macOS、Linux／WSL、Windows 原生各做一次用户授权的真实咨询加连续追问，结果分开记录。
-5. 在全新聊天里验证“怎么用”之类的帮助请求能走到教程。
-
-只过离线 CI，不等于真实的官方 CLI 或桌面端调用也过了。遇到没验证过的 CLI 版本，需要先检查它的能力，不能因为用户说一句“同意”就绕过已有检查。官方 CLI 支持哪些系统，见[设置文档](https://code.claude.com/docs/en/setup)。
+1. 在目标平台运行 `python3 -m unittest discover -s skills/dev-orchestrator/tests -p 'test_*.py'`。
+2. 按 Provider 仓库的说明安装，确认模型菜单里同时有 GPT 和 Claude。
+3. 在一个练习项目里用三种执行模式各跑一次 `/dev`，记录实际模型和结果。
+4. 在全新聊天里问“这个工作流怎么用”，确认能走到说明，不直接开始开发。

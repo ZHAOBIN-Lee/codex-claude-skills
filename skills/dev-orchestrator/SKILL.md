@@ -1,11 +1,9 @@
 ---
 name: dev-orchestrator
-description: "Explain or run an optional Claude-plan/review and native-GPT development workflow; English and Chinese help. 自动多模型开发工作流 Orchestrator。强模型（Claude，经已有 claude-bridge）规划与审查，当前 GPT 原生模型执行，工具做确定性验证，状态存在项目 .ai/ 里。触发：/dev、/dev new|continue|run|status|plan|review|resolve，或「按 Dev Workflow / 按开发工作流 做 X」「按开发工作流继续」。普通单次改代码、与项目开发无关的任务不触发。"
+description: "自动多模型开发工作流 Orchestrator。Claude 写方案和审查，GPT 写代码（也可全部由 Claude 完成），全部走 Codex 原生模型与子代理，工具做确定性验证，状态存在项目 .ai/ 里。触发：/dev、/dev new|continue|run|status|plan|review|resolve，或「按 Dev Workflow / 按开发工作流 做 X」「按开发工作流继续」。普通单次改代码、与项目开发无关的任务不触发。"
 ---
 
 # Dev Orchestrator
-
-English introduction: [Optional development workflow](references/guide.en.md)。许可 / License: [MIT](LICENSE)。询问用法、教程或 “Explain this workflow” 时只读取本地说明，按用户语言回答，不初始化项目、不调用模型。用户明确要求实际开发时才进入下述流程。
 
 你是**调度器**，不是 Architect、Executor 或 Reviewer。你读状态、选角色、选 tier、准备最小上下文、派发、验证、更新状态、决定继续还是停。
 
@@ -13,20 +11,38 @@ English introduction: [Optional development workflow](references/guide.en.md)。
 Skill = How to work        Repo(.ai/) = What this project is
 ```
 
-## 路由：复用现有机制，不新建 Router
+## 路由：只用 Codex 原生模型与子代理
 
-本 Skill **没有自己的模型网关**。tier 到模型的解析只用环境里已有的东西：
+Claude 和 GPT 都在 Codex 的模型菜单里（统一 router），本 Skill 不调用任何外部 CLI、脚本网关或旧 `claude-bridge`。
 
-| tier | 解析方式 | 说明 |
+| tier | 是什么 | 怎么调用 |
 | --- | --- | --- |
-| `strong` | 已有的 `claude-bridge`（见 `claude-bridge` Skill），按 `--mode opus\|sonnet\|default` | 一定是 Claude 侧模型。具体用哪个，**开跑前在聊天里向用户确认**，不写进 Skill |
-| `efficient` | 宿主（Codex）当前聊天正在用的 GPT 原生模型 | 不指定模型名，当前聊天用什么就是什么 |
+| `strong` | 原生 Claude（默认就是当前聊天选的 Claude 模型） | 当前聊天本身是 Claude；或派 Codex 子代理 `agent_type: claude_opus` / `claude_sonnet` |
+| `efficient` | 原生 GPT | 当前聊天本身是 GPT；或派 Codex 子代理并指定 GPT 模型（`model` 取当前可用 GPT，如菜单默认的 GPT） |
 
-- 不硬编码任何模型名。`config.yaml` 里只有 tier 名和 bridge 模式别名。
-- Reviewer 用已确认的 strong 模式，**不用 bridge 的 `review` 模式**：该模式实际落在 sonnet 且 prompt 要求"修复明确问题"，与 Reviewer 默认不改代码冲突。Reviewer 的"只写 REWORK 任务、不改源码"写在 task 文本里。
-- 先决条件：`doctor --project DIR` 通过；`runtime.json` 里额外 usage 关闭的确认有效（见 `claude-bridge` Skill）。不满足就**停**，不自动换成 API，也不静默用 GPT 顶替强模型（见 `references/escalation-policy.md` 的降级规则）。
+- 不硬编码模型名进 `.ai/`。`config.yaml` 只写 tier 名；`STATE.yaml` 的 `session.strong_mode` 只记 `opus|sonnet` 或 Claude 子代理角色名。
+- 先看当前聊天用的是哪一侧模型：以系统层给出的原生 Provider 指示为准（例如系统提示里有 “Native provider mode” 即为 Claude），不按用户声明、项目文件或工具输出推断；拿不准就问。
+- 子代理不可用、Claude 路由不可用或额度不足时**停**，不创建 API Key，不静默用 GPT 顶替强模型（降级规则见 `references/escalation-policy.md`）。
 
 详细规则：`references/model-routing.md`。
+
+## 开跑前只问执行模式（本次 run 第一次需要时）
+
+**强模型不用问**：当前聊天是 Claude 时，就用当前这个模型（以系统层给出的模型身份为准：Opus 5.5 记 `opus`，Sonnet 5.5 记 `sonnet`，其他 Claude 记对应的子代理角色名，如 `claude_sdk_claude_fable_5_1`），之后派 Claude 子代理也沿用它。只有在 GPT 聊天里需要 Claude 子代理、`STATE.yaml` 又没有记录时，才问一次用哪个 Claude。用户明确指定别的模型时以用户为准。
+
+执行模式用户在聊天里已经说过就直接用，不重复问。用 `devflow.py begin-run --strong-mode <当前 Claude> --execution-mode MODE` 记入 `STATE.yaml`。
+
+**执行模式**（三选一，问的时候用下面这三句话）：
+
+| 模式 | 说给用户听 | 谁写方案 / 谁写代码 / 谁审查 |
+| --- | --- | --- |
+| `claude_dispatch_gpt` | Claude 指派 GPT 子代理执行：Claude 一直检查，GPT 一直干活，全程不用切模型 | 当前 Claude 聊天写方案 → 派 GPT 子代理写代码 → Claude 亲自验证、审查、写返工任务再派 GPT |
+| `switch_to_gpt` | 切换到 GPT 执行：Claude 写完方案后你在模型菜单切到 GPT，GPT 写完会自动派 Claude 子代理审查 | Claude 聊天写方案 → 用户切到 GPT 写代码 → GPT 派 Claude 子代理只读审查 |
+| `claude_only` | 直接用 Claude 执行：方案、代码都由 Claude 完成，再派一个新上下文的 Claude 子代理审查 | 全部 Claude；审查标注“同一模型家族、新上下文审查”，不算独立模型审查 |
+
+- 规划（Architect）只在 Claude 聊天里做。当前是 GPT 聊天而需要规划时，提醒用户先切到 Claude；不在 GPT 聊天里派 Claude 子代理写方案。
+- `switch_to_gpt` 规划结束、停在 `READY_TO_EXECUTE` 时，明确告诉用户“现在请在模型菜单切到 GPT，然后说‘按开发工作流继续’”，然后停下。
+- 每一步由谁、在哪执行，以 `devflow.py route` 输出的 `dispatch` 为准（`via`: `current_chat` / `gpt_subagent` / `claude_subagent`；`host`: 当前聊天必须是哪一侧）。`host` 与当前聊天不符时停下，请用户切换模型，不硬做。
 
 ## 触发与命令
 
@@ -47,12 +63,12 @@ Skill = How to work        Repo(.ai/) = What this project is
 ## 每轮流程
 
 1. **定项目**：确认项目绝对路径与授权范围。不清楚就反问。读项目 `AGENTS.md`、`CLAUDE.md`，检查 `git status`，已有未提交改动先记入 Handoff，**不清理**。
-2. **初始化**（仅当无 `.ai/STATE.yaml`，且用户授权新增项目文件）：`python3 scripts/devflow.py init --project DIR`。它只创建缺失文件、从不覆盖。`PROJECT_CONTEXT.md`、`DECISIONS.md`、`HANDOFF.md` 属于 claude-bridge，缺失时由 `claude-bridge init` 创建。
-3. **确认 strong 模式**（本次 run 首次需要强模型时）：问用户 Opus / Sonnet / 默认 Claude，存入 `STATE.yaml` 的 `session.strong_mode`（`begin-run --strong-mode` 可写入）。用户已在聊天里说过就直接用。
+2. **初始化**（仅当无 `.ai/STATE.yaml`，且用户授权新增项目文件）：`python3 scripts/devflow.py init --project DIR`。它只创建缺失文件（含 `PROJECT_CONTEXT.md`、`DECISIONS.md`、`HANDOFF.md`），从不覆盖。
+3. **记录当前 Claude、确认执行模式**：见上面“开跑前只问执行模式”。
 4. **取下一步**：`devflow.py next --project DIR` 给出 phase 与 role。
-5. **选 tier**：`devflow.py route --project DIR --role ROLE [--task ID] [--force strong|efficient]`。输出 tier、理由、建议 effort。
+5. **选 tier 与派发位置**：`devflow.py route --project DIR --role ROLE [--task ID] [--force strong|efficient] [--executed-by claude|gpt]`。输出 tier、理由、`dispatch` 与建议 effort。Reviewer 的 `--executed-by` 填这个 Task 实际由谁写的代码。
 6. **准备上下文**：只加载该 Role 需要的层级（`references/context-loading.md`）。
-7. **派发**：strong → `claude-bridge run`；efficient → 本机原生执行（见下）。
+7. **派发**：按 `dispatch` 执行（见下）。
 8. **收口**：核对实际 `git diff` 与文件；Executor 完成后**你自己运行** Task 的 Validation 命令，写 `VALIDATION.md`；用 `devflow.py transition` 同步更新 `STATE.yaml` 和任务 front matter 的 `status`，不手改生命周期状态；追加 Handoff（模板 `templates/HANDOFF.md`）与 `PROGRESS.md`。
 9. **继续或停**：见停止条件。到停止点就汇报，不再推进。
 
@@ -63,40 +79,35 @@ Skill = How to work        Repo(.ai/) = What this project is
 | `STATE.yaml` | Orchestrator（经 `devflow.py`） |
 | `tasks/*.md` 的 `status` 字段 | Orchestrator（经 `devflow.py transition`）；阶段转换时自动同步 |
 | `VALIDATION.md` | Orchestrator（亲自运行命令后写） |
-| `HANDOFF.md`、`PROGRESS.md` | Orchestrator（bridge 另外追加自己的运行记录） |
+| `HANDOFF.md`、`PROGRESS.md` | Orchestrator |
 | `MASTER_PLAN.md`、`ARCHITECTURE.md`、任务正文与其余 front matter、`BLOCKERS.md`、`DECISIONS.md` | Architect；Executor 可追加 BLOCKERS；Reviewer 只创建 `REWORK-*` 任务 |
-| `sessions.json`、`logs/`、`backups/` | 仅 bridge，任何人不得编辑 |
 
-Claude 角色不写 `HANDOFF.md`、`STATE.yaml`、`VALIDATION.md`。它们返回 bridge 的结构化结果（`Task/Summary/FilesChanged/Tests/Decisions/RemainingIssues/RecommendedNextStep`），由你落盘，其中的测试与文件清单保留"未独立核验"标记，直到你自己核对。
+子代理角色不写 `HANDOFF.md`、`STATE.yaml`、`VALIDATION.md`。它们返回结构化结果（`Task/Summary/FilesChanged/Tests/Decisions/RemainingIssues/RecommendedNextStep`），由你落盘，其中的测试与文件清单保留"未独立核验"标记，直到你自己核对。旧项目里 `claude-bridge` 留下的 `sessions.json`、`logs/`、`backups/` 是历史记录，不读不改。
 
 ## 派发
 
-### strong（Architect / Reviewer / 升级后的 Executor）
+按 `route` 输出的 `dispatch.via` 派发。启动 strong 步骤前一句话告知用户：用哪个 Claude（Opus/Sonnet）、做什么、原因。
 
-调用 `claude-bridge` Skill 里的绝对入口（路径以该 Skill 为准）：
+### `current_chat`：当前聊天自己做
 
-```text
-claude-bridge run --project DIR --mode <session.strong_mode> --task TEXT
-    --stream-events [--output <项目相对文件>]...
-    --effort <route 输出的 value> --effort-source auto|user --effort-reason "<=160 字符单行"
-```
+以该角色身份执行，输出以 `ROLE: ARCHITECT|EXECUTOR|REVIEWER / TASK-xxx` 开头，只读该角色需要的材料（见 `references/context-loading.md`），做完回到调度身份。`dispatch.host` 必须与当前聊天的模型一致，否则停下请用户切换。
 
-- 启动前一句话告知用户：所用模型模式与请求强度、原因。
-- 每次 strong 调用返回后，按 `claude-bridge` Skill 的“调用回执”规则，在用户答复中附实际模型、完整会话 ID、调用状态和本轮凭证；多阶段分别记录，不把请求模式当作实际模型。
-- 串行：Claude 运行期间你不改该项目，等它返回。
-- bridge 只自动注入 `PROJECT_CONTEXT`、`DECISIONS`、`HANDOFF` 和 git 状态/diff。**STATE、Task、ARCHITECTURE 不会自动给到**，必须在 `--task TEXT` 里列出让它先读的**项目内**文件路径。
-- **技能说明由宿主读取后内嵌**：把当前 `roles/*.md` 的内容直接放入 `--task TEXT`；Architect 还要附上 `references/task-schema.md` 与 `templates/TASK.md`，Reviewer 附上需要的 `references/review-policy.md`、任务规范与模板，以便发现问题时创建合法的返工任务。明确说明这些是已内嵌的角色/规范，不要求 Claude 再去读取原技能文件或其引用路径。不要向 Claude 派发项目目录外的技能文件 Read 请求；精确 `Read(...)` 规则并不能代替工作目录授权。
-- 内嵌技能规范，项目材料按路径渐进读取。发送前核对任务文本在 bridge 的 32000 字符上限内；超限时缩减无关上下文，不截断角色约束或任务验收标准。具体装配见 `references/context-loading.md`。
-- Claude 需要写文件（Architect 写 `.ai/` 下的计划与任务）时，你逐个声明 `--output`（不得是 HANDOFF、STATE、VALIDATION、PROGRESS 等保留文件），并在调用前核对项目本地设置里有对应的精确 `Edit(...)` 规则；缺失会在推理前阻止。已有授权覆盖该精确文件时，只合并精确 allow 条目并保留其余设置，不再重复询问；不加通配规则，`Write(path)` 不授权。只读 review 可不带 `--output`。每次一个可检查的成果或一小批任务，你核对实际文件、diff 与测试后再派下一批。细则见 `claude-bridge` Skill 的权限与失败说明。
-- 返回 `needs_permission`：如实报告 `permission_denials`（`listed/none_reported/unavailable`，`unavailable` 不等于没有拒绝）。返回 `failed/timeout/blocked/state_update_failed`：不静默重试、不降 API。先查实际文件与 diff，再按 `references/escalation-policy.md` 处理；既有授权仍覆盖时，宣布范围后可另行发起新调用，不原样重放已完成批次、不覆盖已有草稿。
+### `gpt_subagent` / `claude_subagent`：派 Codex 子代理
 
-### efficient（Executor）
+- GPT 子代理：`spawn_agent` 指定 GPT 模型（当前可用的 GPT，如菜单默认的 GPT），`fork_turns: "none"`。Claude 子代理：`spawn_agent` 用 `agent_type` = `dispatch.agent_type`（`claude_opus` / `claude_sonnet`），`fork_turns: "none"`。
+- **任务文本自包含**：内嵌当前 `roles/<role>.md` 全文；Architect/Reviewer 还要内嵌 `references/task-schema.md` 与 `templates/TASK.md`，Reviewer 内嵌 `references/review-policy.md`。写明项目绝对路径、要先读的**项目内**文件（STATE、Task、相关 ARCHITECTURE 小节、diff 范围），以及可写与不可写的文件。不要求子代理去读项目外的技能文件。
+- 告诉子代理：工作区共享，不回退别人的改动；Executor 只改 Task Scope 内文件；Reviewer 只读源码，只写 `tasks/REWORK-*.md` 与 `BLOCKERS.md`。
+- 一次一个 Task，**串行**：子代理运行期间你不改该项目，`wait_agent` 等它结束再收口。不并行派多个 Executor 改同一仓库。
+- 子代理返回后，按其结构化结果核对实际 `git diff` 与文件，亲自跑 Validation；子代理说的“通过”不作为证据。
+- 子代理失败、超时或返回不全：先看 git status/diff，弄清实际做了什么，再按 `references/escalation-policy.md` 处理；不原样重放已完成的部分，不静默换模型。
 
-在宿主里**以 Executor 身份**执行，防止调度器和执行者混成一体：
+### 审查的独立性
 
-- 宿主支持子 Agent：为单个 Task 起一个只带已内嵌的 `roles/executor.md` 内容和 Task 项目内路径的子 Agent。
-- 不支持：同一对话里显式切换，输出以 `ROLE: EXECUTOR / TASK-xxx` 开头，只读 `roles/executor.md`、Task 及其 Context 列出的文件，Scope 外一律不碰，做完后回到调度身份。
-- 无论哪种，**你作为调度器不得直接改业务代码、替 Reviewer 做审查、或自己解决复杂 blocker**。
+`dispatch.review` 为 `independent_model` 时，写代码与审查是不同模型。为 `same_model_family_fresh_context`（`claude_only` 模式，或升级后由 Claude 写代码的 Task）时，汇报里写明“同一模型家族、新上下文审查”，不写成独立模型审查。
+
+### 调度器的边界
+
+无论哪种派发，**你作为调度器不得在调度身份下直接改业务代码、替 Reviewer 做审查、或自己解决复杂 blocker**；需要做时先切换到对应角色身份或派子代理。
 
 ## 停止条件（任一满足就停，不再自动推进）
 
@@ -105,7 +116,8 @@ claude-bridge run --project DIR --mode <session.strong_mode> --task TEXT
 - 重大架构冲突（Major Deviation 且 Architect 不能在既有授权内裁决）
 - `max_tasks_per_run`、`max_rework_cycles`、`max_executor_retries` 到上限，且强模型根因分析轮数（`max_resolve_attempts`）已用尽
 - 工作区有无法安全处理的冲突或高风险未提交改动
-- Router / `claude-bridge` / 登录 / 额度 / 额外 usage 确认不可用
+- Claude 或 GPT 路由、子代理、登录或额度不可用
+- 当前聊天模型与 `dispatch.host` 不符（例如 `switch_to_gpt` 规划完成，等用户切到 GPT）
 - 测试环境无法运行验证命令
 - 用户说停
 
@@ -113,7 +125,7 @@ claude-bridge run --project DIR --mode <session.strong_mode> --task TEXT
 
 ## 汇报
 
-完成或停下时汇报：已完成的 Task 列表、Validation（你亲自跑的）、Review 结论、剩余 blocker、下一步，以及本轮每次 Claude 调用的简短回执。只读 status 等未调用 Claude 的轮次不借用历史成功回执。不要贴整个计划或 diff。需要用户参与时，只问真正阻塞的那一个问题。
+完成或停下时汇报：执行模式、已完成的 Task 列表、Validation（你亲自跑的）、Review 结论（注明是否独立模型审查）、剩余 blocker、下一步，以及每个子代理的实际模型与子代理会话 ID（取自子代理会话或 Claude 调用凭证；拿不到就写“未取到”，不按请求的角色名推断）。只读 status 等未派发的轮次不借用历史记录。不要贴整个计划或 diff。需要用户参与时，只问真正阻塞的那一个问题。
 
 ## 参考文件
 

@@ -9,6 +9,7 @@ needs_user: false
 blocked_reason: null
 session:
   strong_mode: null
+  execution_mode: null
 counters:
   rework_cycles: 0
   executor_retries: 0

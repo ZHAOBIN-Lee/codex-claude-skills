@@ -4,7 +4,7 @@
 
 These are the outside products and tools the project relies on. They're runtime dependencies, not sources of the project's code.
 
-- **Claude Code:** you install and sign in through official channels. The repository calls the official CLI on your machine; it doesn't distribute the binary, accounts, or credentials. See the [official setup guide](https://code.claude.com/docs/en/setup).
+- **codex-claude-models-plugin:** the provider that puts Claude in the Codex model picker; install it separately from its [repository](https://github.com/ZHAOBIN-Lee/codex-claude-models-plugin). It is modified from Reidond/codex-claude-models-plugin, with license and attribution in that repository. It calls Claude through your own official Claude Code install and subscription login; this repository distributes no official binary, account, or credentials.
 - **Codex Skills:** the project uses the Skill support Codex provides. It doesn't redistribute system Skills, other plugins, or the Skills you have installed. See the [official Skill documentation](https://learn.chatgpt.com/docs/build-skills).
 - **Python standard library and Git:** needed to run and test the project. Their binaries aren't bundled.
 

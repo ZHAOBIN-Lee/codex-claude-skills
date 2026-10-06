@@ -30,6 +30,7 @@
 Completed: TASK-001, TASK-002, REWORK-TASK-002-01
 Validation: PASS（你亲自运行的命令）
 Review: PASS
-Claude receipts: <按 claude-bridge 回执规则逐次列出实际模型、完整会话 ID、状态及本轮凭证；未调用时省略>
+Mode: <claude_dispatch_gpt | switch_to_gpt | claude_only>
+Agents: <每个子代理的实际模型与会话 ID；取不到写“未取到”；未派发时省略>
 Remaining blockers: None | <一个需要用户回答的问题>
 ```

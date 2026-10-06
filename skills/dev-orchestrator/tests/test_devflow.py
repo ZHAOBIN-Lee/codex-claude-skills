@@ -59,7 +59,7 @@ class YamlTests(unittest.TestCase):
         data = devflow.parse_yaml((ROOT / "templates" / "config.yaml").read_text())
         self.assertEqual(data["routing"], devflow.DEFAULTS["routing"])
         self.assertEqual(data["risk"]["force_strong_for"], devflow.DEFAULTS["risk"]["force_strong_for"])
-        self.assertEqual(data["tiers"]["strong"]["bridge_mode"], "ask")
+        self.assertEqual(data["tiers"], devflow.DEFAULTS["tiers"])
 
     def test_task_template_front_matter(self):
         meta, body = devflow.parse_task((ROOT / "templates" / "TASK.md").read_text())
@@ -70,18 +70,22 @@ class YamlTests(unittest.TestCase):
 
 
 class InitTests(unittest.TestCase):
-    def test_init_never_overwrites_and_leaves_bridge_files(self):
+    def test_init_never_overwrites_and_creates_missing_context_files(self):
         with tempfile.TemporaryDirectory() as d:
             ai = Path(d) / ".ai"
             ai.mkdir()
-            (ai / "HANDOFF.md").write_text("bridge owned")
+            (ai / "HANDOFF.md").write_text("existing handoff")
             (ai / "MASTER_PLAN.md").write_text("mine")
             r = devflow.init(d)
-            self.assertEqual((ai / "HANDOFF.md").read_text(), "bridge owned")
+            self.assertEqual((ai / "HANDOFF.md").read_text(), "existing handoff")
             self.assertEqual((ai / "MASTER_PLAN.md").read_text(), "mine")
             self.assertIn("MASTER_PLAN.md", r["skipped_existing"])
+            self.assertIn("HANDOFF.md", r["skipped_existing"])
             self.assertNotIn("HANDOFF.md", r["created"])
-            self.assertEqual(sorted(r["bridge_owned_missing"]), ["DECISIONS.md", "PROJECT_CONTEXT.md"])
+            self.assertIn("DECISIONS.md", r["created"])
+            self.assertIn("PROJECT_CONTEXT.md", r["created"])
+            self.assertTrue((ai / "DECISIONS.md").read_text().startswith("# Decisions"))
+            self.assertEqual(r["next"], "ready")
             self.assertTrue((ai / "tasks").is_dir())
             r2 = devflow.init(d)
             self.assertEqual(r2["created"], [])
@@ -130,14 +134,71 @@ class RouteTests(unittest.TestCase):
         r = devflow.route(self.p, "executor", "TASK-002", "strong")
         self.assertEqual((r["tier"], r["reasons"]), ("strong", ["user override"]))
 
-    def test_dispatch_uses_existing_alias_not_model_names(self):
+    def test_dispatch_uses_tier_names_not_model_names(self):
         r = devflow.route(self.p, "architect")
-        self.assertEqual(r["dispatch"]["via"], "claude-bridge")
+        self.assertEqual(r["dispatch"]["via"], "ask_execution_mode", "no mode chosen yet: ask the user first")
         self.assertEqual(r["effort"], {"value": "high", "source": "auto"})
         self.assertIsNone(devflow.route(self.p, "executor", None)["effort"])
         blob = json.dumps(devflow.DEFAULTS) + (ROOT / "templates" / "config.yaml").read_text()
-        for name in ("gpt-", "claude-opus", "claude-sonnet", "claude-fable"):
+        for name in ("gpt-", "claude-opus", "claude-sonnet", "claude-fable", "claude-bridge", "claude-sdk"):
             self.assertNotIn(name, blob)
+
+
+class ExecutionModeTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = make_project()
+        self.p = self.tmp.name
+        add_task(self.p, "TASK-001")
+        add_task(self.p, "TASK-002", risk="high")
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def where(self, role, task=None, **kw):
+        d = devflow.route(self.p, role, task, **kw)["dispatch"]
+        return (d["via"], d["host"], d.get("agent_type"), d.get("review"))
+
+    def test_mode_and_model_are_validated_and_stored(self):
+        with self.assertRaises(devflow.DevflowError):
+            devflow.begin_run(self.p, execution_mode="bridge")
+        with self.assertRaises(devflow.DevflowError):
+            devflow.begin_run(self.p, "default")
+        r = devflow.begin_run(self.p, "sonnet", "claude_dispatch_gpt")
+        self.assertEqual((r["strong_mode"], r["execution_mode"]), ("sonnet", "claude_dispatch_gpt"))
+        self.assertEqual(devflow.next_action(self.p)["execution_mode"], "claude_dispatch_gpt")
+
+    def test_current_chat_claude_role_is_recorded_and_used_for_subagents(self):
+        with self.assertRaises(devflow.DevflowError):
+            devflow.begin_run(self.p, "Claude Fable")
+        devflow.begin_run(self.p, "claude_sdk_claude_fable_5_1", "claude_only")
+        self.assertEqual(self.where("reviewer", "TASK-001")[2], "claude_sdk_claude_fable_5_1")
+
+    def test_claude_dispatches_gpt_subagents_and_reviews_itself(self):
+        devflow.begin_run(self.p, "opus", "claude_dispatch_gpt")
+        self.assertEqual(self.where("architect")[:2], ("current_chat", "claude"))
+        self.assertEqual(self.where("executor", "TASK-001")[:2], ("gpt_subagent", "claude"))
+        self.assertEqual(self.where("reviewer", "TASK-001"), ("current_chat", "claude", None, "independent_model"))
+        # A strong-tier task is coded by Claude itself, so its review is a fresh-context Claude sub-agent.
+        self.assertEqual(self.where("executor", "TASK-002")[:2], ("current_chat", "claude"))
+        self.assertEqual(self.where("reviewer", "TASK-002"),
+                         ("claude_subagent", "claude", "claude_opus", "same_model_family_fresh_context"))
+
+    def test_switch_to_gpt_codes_in_the_gpt_chat_and_spawns_a_claude_reviewer(self):
+        devflow.begin_run(self.p, "sonnet", "switch_to_gpt")
+        self.assertEqual(self.where("architect")[:2], ("current_chat", "claude"))
+        self.assertEqual(self.where("executor", "TASK-001")[:2], ("current_chat", "gpt"))
+        self.assertEqual(self.where("reviewer", "TASK-001"), ("claude_subagent", "gpt", "claude_sonnet", "independent_model"))
+        self.assertEqual(self.where("executor", "TASK-002")[:3], ("claude_subagent", "gpt", "claude_sonnet"))
+
+    def test_claude_only_reports_same_family_review(self):
+        devflow.begin_run(self.p, "opus", "claude_only")
+        self.assertEqual(self.where("executor", "TASK-001")[:2], ("current_chat", "claude"))
+        self.assertEqual(self.where("reviewer", "TASK-001"),
+                         ("claude_subagent", "claude", "claude_opus", "same_model_family_fresh_context"))
+
+    def test_explicit_executed_by_wins(self):
+        devflow.begin_run(self.p, "opus", "claude_dispatch_gpt")
+        self.assertEqual(self.where("reviewer", "TASK-001", executed_by="claude")[3], "same_model_family_fresh_context")
 
     def test_project_config_override(self):
         tmp = make_project("routing:\n  executor: strong\n")

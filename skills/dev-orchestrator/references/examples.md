@@ -8,26 +8,26 @@
 按开发工作流继续                 # 下次回来接着做
 /dev status                      # 只看进度，不花额度
 ```
-开始前只需回答一次："强模型用 Opus / Sonnet / 默认？"
+开始前只需回答一次执行模式（Claude 指派 GPT 子代理 / 切换到 GPT / 全部 Claude）；强模型就是当前聊天选的 Claude。
 
 ## 1. 新项目
 ```text
 用户：在 /Users/me/code/member-system 里，按开发工作流实现会员系统（注册、等级、积分）。
 ```
-1. Orchestrator 确认项目路径与授权，读项目规则、`git status`。无 `.ai/`：征得同意后 `devflow init`，再 `claude-bridge init`。
-2. 问用户强模型模式 → 用户答 Opus。`devflow begin-run --strong-mode opus`。
-3. `transition --to PLANNING`；`route --role architect` → strong, effort high。告知："本次用 Claude Opus，请求强度 high；新项目需要整体方案与任务拆分。"
-4. bridge 调 Architect：写 `MASTER_PLAN`、`ARCHITECTURE`、ADR、`TASK-001..006`（积分任务标 `domains: [payments]`）。→ `READY_TO_EXECUTE`。
-5. 对 TASK-001：`route --role executor --task TASK-001` → efficient（complexity 3, risk low）。GPT 以 Executor 身份实现 → `VALIDATING` → Orchestrator 亲自跑 `npm test`、`npm run typecheck`，写 `VALIDATION.md`。
-6. `READY_FOR_REVIEW` → strong Reviewer → PASS → `READY_TO_EXECUTE` 下一个 Task。
-7. 到 TASK-004（积分扣减，`domains: [payments]`）：`route` → **strong**（sensitive domain），由 Claude 执行，再由 Claude Reviewer 审。
+1. Orchestrator 确认项目路径与授权，读项目规则、`git status`。无 `.ai/`：征得同意后 `devflow init`（同时补齐 `PROJECT_CONTEXT`、`DECISIONS`、`HANDOFF`）。
+2. 当前聊天是 Claude Opus，记为强模型；问执行模式 → 用户答 Claude 指派 GPT 子代理。`devflow begin-run --strong-mode opus --execution-mode claude_dispatch_gpt`。
+3. `transition --to PLANNING`；`route --role architect` → strong, effort high。告知："本次由当前 Claude Opus 聊天写方案；新项目需要整体方案与任务拆分。"
+4. Claude 聊天以 Architect 身份写 `MASTER_PLAN`、`ARCHITECTURE`、ADR、`TASK-001..006`（积分任务标 `domains: [payments]`）。→ `READY_TO_EXECUTE`。
+5. 对 TASK-001：`route --role executor --task TASK-001` → efficient（complexity 3, risk low）。`dispatch.via=gpt_subagent`：派 GPT 子代理实现 → `VALIDATING` → Orchestrator 亲自跑 `npm test`、`npm run typecheck`，写 `VALIDATION.md`。
+6. `READY_FOR_REVIEW` → Claude 聊天以 Reviewer 身份审查（独立模型审查）→ PASS → `READY_TO_EXECUTE` 下一个 Task。
+7. 到 TASK-004（积分扣减，`domains: [payments]`）：`route` → **strong**（sensitive domain），由 Claude 聊天自己执行，再派新上下文的 Claude 子代理审（汇报写明同一模型家族审查）。
 8. 做满 5 个 Task（`max_tasks_per_run`）→ 汇报并停；用户说"继续"再 `begin-run`。
 
 ## 2. 已有项目新增 Feature
 ```text
 用户：在 /Users/me/code/shop 按开发工作流加"优惠券核销"。
 ```
-- 已有 `.ai/PROJECT_CONTEXT.md`（bridge 的）→ `devflow init` 只补缺失文件，`skipped_existing` 里列出已有的。
+- 已有 `.ai/PROJECT_CONTEXT.md`→ `devflow init` 只补缺失文件，`skipped_existing` 里列出已有的。
 - 工作区有用户未提交改动：记入 Handoff 基线，不清理。若它与 Task Scope 的文件重叠 → 停下问用户。
 - Architect 先读现有 transaction helper，写 ADR-003「复用现有事务抽象，不引入新 ORM」，拆出 TASK-001（服务）、TASK-002（API）、TASK-003（并发测试，`domains: [concurrency]`）。
 - TASK-001 efficient 实现；Review 返回 REWORK：并发下可重复核销。Reviewer 写 `REWORK-TASK-001-01`（含失败用例）→ `REWORK_REQUIRED` → `EXECUTING`（`rework_cycles=1`）→ 验证 → 复审 PASS。

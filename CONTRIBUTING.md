@@ -11,11 +11,10 @@
 在仓库根目录运行：
 
 ```text
-python3 -m unittest discover -s skills/claude-bridge/tests -p 'test_*.py'
 python3 -m unittest discover -s skills/dev-orchestrator/tests -p 'test_*.py'
 ```
 
-Bridge 测试使用 fake CLI，调度器测试检查任务生命周期和确定性逻辑。这两组都不调用真实模型，也不需要订阅。真实模型测试由本机使用者自己决定做不做；个人订阅账号和登录凭据不要放进 CI。
+调度器测试检查任务生命周期、派发判断和确定性逻辑，不调用真实模型，也不需要订阅。真实模型测试由本机使用者自己决定做不做；个人订阅账号和登录凭据不要放进 CI。
 
 ## 提交之前
 

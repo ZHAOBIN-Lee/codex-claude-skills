@@ -2,7 +2,15 @@
 
 [简体中文](CHANGELOG.md) · [English](CHANGELOG.en.md)
 
-## 未发布 — 本地权限与超时修复
+## 0.2.0 — 2026-10-07
+
+- 仓库只保留 `dev-orchestrator`。旧版 `claude-bridge`（通过 Claude Code CLI 转发）停止维护，最后的版本在 `legacy-claude-bridge` tag；下面的 0.1.0-draft 和“本地权限与超时修复”两节都属于旧版。
+- `dev-orchestrator` 改为只用 Codex 原生模型和子代理，需要先装 [codex-claude-models-plugin](https://github.com/ZHAOBIN-Lee/codex-claude-models-plugin)。
+- 新增三种执行模式：Claude 指派 GPT 子代理、切换到 GPT 执行、直接用 Claude 执行。开跑时只问执行模式，强模型默认用当前聊天选的 Claude。
+- `devflow.py`：新增 `begin-run --execution-mode`；`route` 会输出每一步在当前聊天还是子代理执行、需要哪一侧模型，以及审查是否为独立模型；`init` 自己补齐 `PROJECT_CONTEXT`、`DECISIONS`、`HANDOFF`。
+- 汇报改为记录执行模式和每个子代理的实际模型与会话。54 项离线测试通过。
+
+## 旧版：未发布的本地权限与超时修复（claude-bridge）
 
 这是对公开提交 567dd9d 的本地修复，不是新的 GitHub 发布，也没有新版本号。
 
@@ -11,10 +19,10 @@
 - 有界读取 stdout/stderr，超时时终止整个进程组，不再因后代进程持有管道而挂住。
 - 新增 `permission_denials_status`（listed/none_reported/unavailable）；没有取到的证据不再当作“没有拒绝”。最终结果带有效会话 ID 时，失败也如实报告，但只有 complete 才保存。
 - 结构化结果被截断时标 `result_complete` 为 false；`--max-turns` 限 1..20，`--timeout` 必须是有限秒数，0<seconds<=3600（0 无效）。
-- 新增[权限与失败处理](skills/claude-bridge/references/08-permissions-and-failures.md)教程，并修正 `dev-orchestrator` 里“失败一律询问用户”的冲突。
+- 新增[权限与失败处理](https://github.com/ZHAOBIN-Lee/codex-claude-skills/blob/legacy-claude-bridge/skills/claude-bridge/references/08-permissions-and-failures.md)教程，并修正 `dev-orchestrator` 里“失败一律询问用户”的冲突。
 - 验证范围：离线测试，以及在 macOS 上用官方 CLI 2.1.285 的真实订阅小测试。Linux 和 Windows 没有验证。
 
-## 0.1.0-draft — 2026-10-05
+## 0.1.0-draft — 2026-10-05（claude-bridge）
 
 - 将 Claude 调用相关资源整理为自包含 Skill 的公开预览草稿。
 - 增加安装后可询问的本地教程入口、连续对话约定、偏好示例和实际模型回执说明。
@@ -25,4 +33,4 @@
 - 按维护者选择采用 MIT，署名 ZHAOBIN-Lee；许可副本随各 Skill 安装目录保留。
 - 改写中英文 README、教程和维护文档，首页先讲用途、安装和第一个请求，细节移到对应教程。
 
-公开仓库为 ZHAOBIN-Lee/codex-claude-skills，尚未发布稳定版或版本 tag。许可状态见 LICENSING.md；干净环境安装与各平台真实验证仍需完成。
+公开仓库为 ZHAOBIN-Lee/codex-claude-skills，尚未发布稳定版。许可状态见 LICENSING.md；干净环境安装与各平台真实验证仍需完成。

@@ -21,9 +21,9 @@ Executor 停止 → BLOCKERS.md 写事实 → transition BLOCKED(blocked_reason)
 ## 失败回退
 | 失败 | 处理 |
 | --- | --- |
-| bridge `doctor` 失败 / 未登录 / API 或非预期认证 / 额外 usage 未确认 | 停。不创建 API Key，不自动开额外用量，不读凭据 |
-| bridge `failed` / `timeout` / `state_update_failed` | 不静默重试（超时后完成状态未知）。先看 git status/diff 和返回的元数据，弄清实际做了什么，向用户报告。既有授权仍覆盖时，宣布范围后可另行发起新调用，不原样重放已完成的批次，不覆盖已有草稿；授权不足、范围不清，或登录、额度、锁等资源/守卫类失败，才停下问用户。不做自动重试循环 |
-| bridge `needs_permission` / `blocked`（缺精确输出权限） | 如实报告被拒操作或预检结果（`permission_denials_status`：`listed/none_reported/unavailable`）。既有授权覆盖该精确操作时，可只合并精确 allow 条目并保留其余设置，再另行发起新调用；超出既有授权或指令含糊才问用户 |
+| Claude/GPT 路由不可用、未登录、额度不足、子代理角色缺失 | 停。不创建 API Key，不自动开额外用量，不读凭据，不静默换模型 |
+| 子代理失败 / 超时 / 返回不全，或当前聊天这一步报错 | 不静默重试循环（超时后完成状态未知）。先看 git status/diff 和子代理返回的内容，弄清实际做了什么，向用户报告。既有授权仍覆盖时，宣布范围后可另行派发，不原样重放已完成的部分，不覆盖已有草稿；授权不足、范围不清，或登录、额度等资源类失败，才停下问用户 |
+| Codex 沙箱或审批拒绝了某个操作 | 如实报告被拒的操作。不绕过沙箱，不改全局权限；需要用户批准时停下说明原因 |
 | 额度/模型不可用 | 停 strong 阶段，把当前状态写入 Handoff，让用户选择：等待 / 换 Claude 模式 / 明确同意降级 |
 | 结构化结果缺失或格式不符 | 视为未完成，核对实际文件，不凭文字推断 |
 | 验证命令无法运行 | 记录并停止，不当作通过 |
@@ -32,7 +32,7 @@ Executor 停止 → BLOCKERS.md 写事实 → transition BLOCKED(blocked_reason)
 由 GPT 临时承担 Architect/Reviewer：
 - Handoff 与 PROGRESS 标记 `degraded: <role> by efficient tier`；
 - 同一个模型既执行又审查**不算独立 Review**，汇报里必须写明，Task 不得标为"Reviewer PASS"，只能"自审通过，待强模型复核"；
-- 恢复 bridge 后补做强模型复核。
+- Claude 恢复可用后补做强模型复核。
 不得静默降级，也不得因为"方便"跳过。
 
 ## 安全停止条件（汇总）

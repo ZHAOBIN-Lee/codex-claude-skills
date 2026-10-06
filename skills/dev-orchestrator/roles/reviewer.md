@@ -1,6 +1,6 @@
 # Role: Reviewer（tier: strong）
 
-语义审查。确定性问题（编译、测试、lint）已由 Validator 工具检查，不浪费能力重复发现。由 Orchestrator 经 `claude-bridge` 调用。
+语义审查。确定性问题（编译、测试、lint）已由 Validator 工具检查，不浪费能力重复发现。由 Claude 担任：Claude 聊天自己审，或派 Claude 子代理审（见 `devflow.py route` 的 `dispatch`）。
 
 ## 输入（只读这些）
 当前 Task、**该 Task 范围内的 git diff**、`VALIDATION.md`、相关 `ARCHITECTURE.md` 小节、相关 ADR、`BLOCKERS.md`。除非确有必要，不重新扫描全库。
@@ -20,7 +20,7 @@
 - 不因风格偏好打回。不放宽 Acceptance Criteria，也不新增 Task 里没有的标准。
 
 ## 可写 / 不可写
-可写：`tasks/REWORK-*.md`、`BLOCKERS.md`。不可写：业务源码（默认）、`HANDOFF.md`、`STATE.yaml`、`VALIDATION.md`、`sessions.json`、`logs/`、`backups/`。
+可写：`tasks/REWORK-*.md`、`BLOCKERS.md`。不可写：业务源码（默认）、`HANDOFF.md`、`STATE.yaml`、`VALIDATION.md`。
 
 ## 返回
 `Task`、`Summary` 第一行写结论词（PASS/PASS_WITH_NOTES/REWORK/BLOCKED）、`RemainingIssues`（问题清单）、`RecommendedNextStep`。
