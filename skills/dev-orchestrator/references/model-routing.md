@@ -40,4 +40,16 @@ Architect → strong；Executor → efficient；Reviewer → strong。
 一句话：本次用 Claude <Opus|Sonnet>、在当前聊天还是子代理、做什么。efficient 不用特别告知，状态汇报里带一句"Executor: GPT"。
 
 ## 并行
-V1 一次只一个 Executor 改项目，子代理串行派发、等待返回后再派下一个。
+有保护的并行：能一起做的一次派出，会互相覆盖的仍然串行。
+
+- **一次派几个**：同一步的 `calls` 里放多个 `spawn_agent`，数量不超过 Codex 当前可用的并发名额（开发者消息里的 “concurrency slots” 减去主聊天自己，默认 4 个名额即最多 3 个子代理）。超出的留到下一批。
+- **只读工作可直接并行**：Reviewer、排查、调研、读代码，任务之间不依赖彼此结果即可。
+- **写代码的 Executor 并行条件**（全部满足才行）：
+  1. 各 Task 的 Scope 文件集合两两不相交（包括测试文件、锁文件、生成文件、共享配置）；
+  2. 没有 Task 依赖另一个 Task 的产出；
+  3. 都不需要改依赖清单、数据库迁移或全局配置；
+  4. 派发前记录同一个 `git status`/`git diff --stat` 基线。
+  任一条不满足，或拿不准，就串行。
+- **任务文本**：每个 Executor 写明“只改以下文件，其他文件一律不碰；工作区里有别的代理在同时改别的文件，不要回退或格式化它们”。
+- **收口**：`wait_agent` 等这一批全部返回，再逐个对照 Scope 核对 diff。发现越界改动或两个 Task 碰了同一文件 → 该批次不进 Review，按 git-policy 处理。Validation 在整批合并后统一亲自跑。
+- **GPT 子代理优先并行**：执行类任务大多派 GPT，并行时同样指定 GPT 模型、`fork_turns: "none"`。

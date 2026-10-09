@@ -97,7 +97,10 @@ Claude 和 GPT 都在 Codex 的模型菜单里（统一 router），本 Skill �
 - GPT 子代理：`spawn_agent` 指定 GPT 模型（当前可用的 GPT，如菜单默认的 GPT），`fork_turns: "none"`。Claude 子代理：`spawn_agent` 用 `agent_type` = `dispatch.agent_type`（`claude_opus` / `claude_sonnet`），`fork_turns: "none"`。
 - **任务文本自包含**：内嵌当前 `roles/<role>.md` 全文；Architect/Reviewer 还要内嵌 `references/task-schema.md` 与 `templates/TASK.md`，Reviewer 内嵌 `references/review-policy.md`。写明项目绝对路径、要先读的**项目内**文件（STATE、Task、相关 ARCHITECTURE 小节、diff 范围），以及可写与不可写的文件。不要求子代理去读项目外的技能文件。
 - 告诉子代理：工作区共享，不回退别人的改动；Executor 只改 Task Scope 内文件；Reviewer 只读源码，只写 `tasks/REWORK-*.md` 与 `BLOCKERS.md`。
-- 一次一个 Task，**串行**：子代理运行期间你不改该项目，`wait_agent` 等它结束再收口。不并行派多个 Executor 改同一仓库。
+- **有保护的并行**（细则见 `references/model-routing.md`“并行”）：
+  - 只读的工作（Reviewer、排查、调研、读代码）互不依赖时，在同一步的 `calls` 里一次派出多个子代理，不要派一个等一个。
+  - 写代码的 Executor 只有在各 Task 的 Scope 文件**完全不重叠**、且彼此没有依赖时才并行；有任何重叠或依赖就串行。
+  - 并行派出后用 `wait_agent` 等全部返回，再逐个核对 diff、统一跑 Validation。子代理运行期间你不改该项目。
 - 子代理返回后，按其结构化结果核对实际 `git diff` 与文件，亲自跑 Validation；子代理说的“通过”不作为证据。
 - 子代理失败、超时或返回不全：先看 git status/diff，弄清实际做了什么，再按 `references/escalation-policy.md` 处理；不原样重放已完成的部分，不静默换模型。
 
